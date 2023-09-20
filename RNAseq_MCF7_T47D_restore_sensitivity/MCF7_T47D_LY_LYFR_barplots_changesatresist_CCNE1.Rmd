@@ -1,0 +1,334 @@
+---
+title: "MCF7 T47D CCNE1 barplots"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+# load library
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r include = FALSE, message=FALSE}
+# load library
+
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(gplots)
+library(clusterProfiler)
+library(ComplexHeatmap)
+library(UpSetR)
+library(GSVA)
+library(ggprism)
+```
+
+
+```{r echo=FALSE}
+# from preparation file
+# load(file = "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M/antonioahn/preparation/data/preparation.RData")
+load(file = "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/preparation/data/preparation.RData")
+
+load("/researchers/antonio.ahn/general/R/Download_resources/RData/mart_apr2019.RData")
+load("/researchers/antonio.ahn/general/R/Download_resources/RData/mart_aug2020.RData")
+```
+
+# DGE (DESeq2) 
+
+- had to rerun DEseq2 because i had not preivously done LYresistant_DMSO versus PAR_LY or LYFulvresistant_DMSO versus PAR_LY
+- message is that CCNE1 gets overexpressed at resistance to LY or LYFR
+
+```{r}
+ggplot_gene("CCNE1", cell = "MCF7M", group = c("PAR", "LYFR", "LYR"))
+ggplot_gene("CCNE1", cell = "T47D", group = c("PAR", "LYFR", "LYR"))
+```
+
+```{r}
+annotation_res <- function(res_input, temp_input) {
+  res_input$logFC_MMSE <- temp_input$log2FoldChange
+  res_input$lfcSE_MMSE <- temp_input$lfcSE
+  res_input$svalue <- temp_input$svalue
+
+  colnames(res_input)[colnames(res_input) == "log2FoldChange"] <- "logFC_MLE"
+  colnames(res_input)[colnames(res_input) == "lfcSE"] <- "lfcSE_MLE"
+
+
+  res_input <- as_tibble(res_input, rownames = "ens_gene_ver")
+  res_input$ens_gene <- gsub("\\..*", "", res_input$ens_gene_ver)
+
+  res_input <- res_input[order(res_input$pvalue), ]
+
+  ## -------------------------------
+  # adding gene annotation such as gene name, lncRNA or pc gene? (using gene_biotype_2020), lncRNA biotype info (using gene_biotype_2019)
+  table(res_input$ens_gene_ver %in% t2g_aug2020$ens_gene_ver)
+  # adding gene name
+  res_input$SYMBOL <- t2g_aug2020$ext_gene[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+  res_input$entrez <- t2g_aug2020$entrez_gene[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+
+  # adding gene_biotype information from t2g_aug2020
+  res_input$gene_biotype_2020 <- t2g_aug2020$gene_biotype[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+
+  # adding gene_biotype information from t2g_apr2019, but only available for 20,300  genes
+  # FALSE  TRUE
+  #  262 18136
+  table(res_input$ens_gene %in% t2g_apr2019$ens_gene)
+  res_input$gene_biotype_2019 <- t2g_apr2019$gene_biotype[match(res_input$ens_gene, t2g_apr2019$ens_gene)]
+
+  # adding in gene location information
+  res_input$chromosome_name <- t2g_aug2020$chromosome_name[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+  res_input$band <- t2g_aug2020$band[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+  res_input$start_position <- t2g_aug2020$start_position[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+  res_input$end_position <- t2g_aug2020$end_position[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+  res_input$strand <- t2g_aug2020$strand[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+
+  res_input$sig <- ifelse(res_input$padj < 0.05, "Yes", "No")
+
+  res_input
+}
+```
+
+
+```{r, message = FALSE}
+# cellline names
+cl_names <- c("MCF7M", "T47D")
+DGE_list <- c()
+
+for (i in cl_names) {
+  dds <- DESeqDataSetFromMatrix(fcounts_Fmat_list[[i]],
+    colData = sample_information_list[[i]],
+    design = ~ 0 + resist_treat
+  )
+
+  dds <- DESeq(dds)
+  resultsNames(dds)
+
+  # Initialising
+  DGE_list_LFC0 <- vector(mode = "list", length = 3)
+
+  resultsNames(dds)
+  contrast_list <- list(
+    c("PAR_DMSO", "PAR_LY"),
+    c("PAR_LY", "LYR_DMSO"),
+    c("PAR_LY", "LYFR_DMSO")
+  )
+
+  for (j in 1:length(DGE_list_LFC0)) {
+    DGE_list_LFC0[[j]] <- results(dds, contrast = c("resist_treat", contrast_list[[j]][[2]], contrast_list[[j]][[1]]), alpha = 0.05, lfcThreshold = 0)
+
+    temp <- lfcShrink(dds, contrast = c("resist_treat", contrast_list[[j]][[2]], contrast_list[[j]][[1]]), type = "ashr", res = DGE_list_LFC0[[j]], lfcThreshold = 0)
+
+    DGE_list[[i]][[j]] <- annotation_res(DGE_list_LFC0[[j]], temp)
+  }
+}
+
+# changing names
+contrast_list <- list(
+  c("PAR_DMSO", "PAR_LY"),
+  c("PAR_LY", "LYR_DMSO"),
+  c("PAR_LY", "LYFR_DMSO")
+)
+
+new_names <- c()
+for (i in 1:length(contrast_list)) {
+  new_names <- c(new_names, paste0(contrast_list[[i]][2], "_vs_", contrast_list[[i]][1]))
+}
+new_names
+
+names(DGE_list$MCF7M) <- new_names
+names(DGE_list$T47D) <- new_names
+```
+
+
+# CCNE1 barplot
+
+```{r}
+# this is needed for the adjusted P-values
+names(DGE_list$MCF7M)
+```
+
+
+```{r results=FALSE, echo=FALSE}
+norm_mat_list_sub <- c()
+
+for (i in 1:length(fcounts_Fmat_list)) {
+  dds <- DESeqDataSetFromMatrix(fcounts_Fmat_list[[i]], colData = sample_information_list[[i]], design = ~resist_treat)
+  dds <- DESeq(dds)
+
+  norm_mat <- counts(dds, normalized = TRUE)
+
+  rownames(norm_mat) <- t2g_aug2020$ext_gene[match(rownames(norm_mat), t2g_aug2020$ens_gene_ver)]
+  norm_mat_list_sub[[i]] <- norm_mat
+}
+
+names(norm_mat_list_sub) <- names(fcounts_Fmat_list)
+```
+
+
+```{r}
+# only select samples of interest
+# which are PAR_DMSO, PAR_LY, LYR_DMSO, LYFR_DMSO
+
+norm_mat_list_sub <- norm_mat_list_sub %>% lapply(function(x) {
+  index <- colnames(x) %>% grep("_PAR_DMSO_|_PAR_LY_|_LYR_DMSO_|_LYFR_DMSO_", .)
+  x[, index]
+})
+```
+
+```{r}
+normmat_ggplot_nonlog <- vector(mode = "list", length = 2)
+for (i in 1:2) {
+  normmat_ggplot_nonlog[[i]] <- norm_mat_list_sub[[i]] %>% as.data.frame()
+  normmat_ggplot_nonlog[[i]]$genesym <- rownames(normmat_ggplot_nonlog[[i]])
+  normmat_ggplot_nonlog[[i]] <- gather(normmat_ggplot_nonlog[[i]], key = name, value = values, -genesym)
+  normmat_ggplot_nonlog[[i]]$samples <- normmat_ggplot_nonlog[[i]]$name
+  # separate out name into 4 separate columns
+  normmat_ggplot_nonlog[[i]] <- separate(normmat_ggplot_nonlog[[i]], samples, into = c("cell", "resistance", "treatment", "replicate"), sep = "_")
+  # these 2 columns are united to make the groups
+  normmat_ggplot_nonlog[[i]] <- normmat_ggplot_nonlog[[i]] %>% unite("resist_treat", c("resistance", "treatment"), remove = FALSE)
+  # making it into a factor and correcting the levels
+  normmat_ggplot_nonlog[[i]]$resist_treat <- factor(normmat_ggplot_nonlog[[i]]$resist_treat)
+  normmat_ggplot_nonlog[[i]]$treatment <- factor(normmat_ggplot_nonlog[[i]]$treatment, levels = c("DMSO", "LY", "ARC", "LY.ARC"))
+  normmat_ggplot_nonlog[[i]]$resistance <- factor(normmat_ggplot_nonlog[[i]]$resistance, levels = c("PAR", "LYR", "LYFR"))
+  normmat_ggplot_nonlog[[i]]$replicate <- factor(normmat_ggplot_nonlog[[i]]$replicate, levels = c("1", "2", "3"), labels = c("rep1", "rep2", "rep3"))
+}
+
+names(normmat_ggplot_nonlog) <- c("MCF7M", "T47D")
+```
+
+
+
+```{r}
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+boxplot_col <- c(
+  "PAR_DMSO" = "#0070B9",
+  "PAR_LY" = "#872464",
+  "LYR_DMSO" = "#FFC541",
+  "LYFR_DMSO" = "#00A8E3"
+)
+```
+
+```{r}
+ggplot_gene_relative <- function(genes, cellline) {
+  plot_df <- dplyr::filter(normmat_ggplot_nonlog[[cellline]], genesym %in% genes) %>% arrange(genesym)
+
+  plot_df <- plot_df %>%
+    group_by(genesym) %>%
+    summarise(
+      names = name,
+      resistance = resistance,
+      treatment = treatment,
+      replicate = replicate,
+      resist_treat = resist_treat,
+      value = values,
+      relative_value = value / abs(mean(value[resist_treat == "PAR_DMSO"]))
+    )
+
+  max_value <- max(plot_df$relative_value) + 0.2
+
+  pvalue_manual_1 <- DGE_list[[cellline]]$PAR_LY_vs_PAR_DMSO %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "PAR_DMSO", group2 = "PAR_LY") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value)
+
+  pvalue_manual_2 <- DGE_list[[cellline]]$LYR_DMSO_vs_PAR_LY %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "PAR_LY", group2 = "LYR_DMSO") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value + 0.4)
+
+  pvalue_manual_3 <- DGE_list[[cellline]]$LYFR_DMSO_vs_PAR_LY %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "PAR_LY", group2 = "LYFR_DMSO") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value + 0.8)
+
+
+  pvalue_manual <- rbind(pvalue_manual_1, pvalue_manual_2) %>%
+    rbind(pvalue_manual_3)
+
+  plot_df$resist_treat <- plot_df$resist_treat %>% factor(levels = c("PAR_DMSO", "PAR_LY", "LYR_DMSO", "LYFR_DMSO"))
+
+  a1 <- plot_df %>%
+    ggplot(aes(x = resist_treat, y = relative_value)) +
+    # geom_boxplot(lwd=1, show.legend=FALSE) +
+    # geom_bar(stat="identity",
+    # position=position_dodge()) +
+    # geom_errorbar(aes(ymin=len-sd, ymax=len+sd), width=.2,
+    # position=position_dodge(.9))  +
+    # geom_errorbar() +
+    geom_bar(aes(fill = resist_treat),
+      stat = "summary", fun = "mean",
+      position = position_dodge(), width = 1, show.legend = FALSE
+    ) +
+    # stat_summary(fun=mean, geom="point", color="red") +
+    scale_fill_manual(values = boxplot_col) +
+    stat_pvalue_manual(pvalue_manual, label = "padj", bracket.size = 1.5) +
+    # stat_compare_means(comparisons = my_comparisons, label = "p.format", method = "t.test", bracket.size = 1.5) +
+    geom_jitter(aes(col = resist_treat), size = 2, color = "black", stroke = 3) +
+    stat_summary(
+      fun.data = mean_sdl, fun.args = list(mult = 1),
+      geom = "errorbar", color = "black", width = 0.5, linewidth = 0.5
+    ) +
+    ylab("relative mRNA expression") +
+    ggtitle(cellline) +
+    facet_grid(. ~ genesym) +
+    theme_prism() +
+    theme(
+      axis.text.y = element_text(color = "black", size = 20),
+      axis.text.x = element_text(color = "black", size = 20, angle = 45, hjust = 1, vjust = 1),
+      axis.title.y = element_text(color = "black", size = 25),
+      axis.title.x = element_blank(),
+      strip.text.x = element_text(size = 20)
+    )
+
+  print(a1)
+}
+```
+
+```{r}
+ggplot_gene_relative(c("CCNE1"), "MCF7M")
+ggplot_gene_relative(c("CCNE1"), "T47D")
+```
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+# ggsave(file="OV5398PDX_E2Fbarcode_test.svg", plot=a1, width=10, height=8)
+
+
+genes_i <- c("CCNE1")
+celllines_i <- c("MCF7M", "T47D")
+
+for (i in genes_i) {
+  for (j in celllines_i) {
+    pdf(paste0("overcomeresist_", j, "_", i, ".pdf"),
+      width = 8, # 5 x 300 pixels
+      height = 6
+    ) # 300 pixels per inch)        # smaller font size
+
+    ggplot_gene_relative(i, j)
+
+    dev.off()
+  }
+}
+```
+

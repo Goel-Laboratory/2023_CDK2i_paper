@@ -1,0 +1,236 @@
+---
+title: "HOMER"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+Information 
+- ARC here is INX315
+
+# load libraries
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/.local/share/rstudio/library", "/config/binaries/R/4.2.0/R_libraries", "/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/lib64/R/library"))
+# .libPaths(.libPaths()[2])
+```
+
+``` {r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(RColorBrewer)
+library(cowplot)
+library(VennDiagram)
+library(DT)
+library(GenomicFeatures)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(cowplot)
+library(ggprism)
+```
+
+```{r echo=FALSE}
+# load previously analysed R dataset
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/1.overcome_resist_LYvsDMSO/1.overview/data/RData/overcome_resist.RData")
+```
+
+# preparation
+
+```{r results=FALSE, message=FALSE, warning=FALSE}
+file_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/1.overcome_resist_LYvsDMSO/3.motif_analysis/HOMER/output"
+
+# homer output
+# files_i <- list.files(file_dir) %>% rev
+# files_i <- list.files(file_dir, pattern = "_|_promoter_")
+files_i <- list.files(file_dir) %>% grep(pattern = "_nonpromoter_|_promoter_", invert = TRUE, value = TRUE)
+
+
+# change order to how i like it. PAR first, then LYR, LYFR then the LYR.LYFR
+# files_i <- files_i[c(1:4, 9:16, 5:8)]
+files_i <- files_i[c(6:1)]
+
+homer_o <- vector(mode = "list", length = length(files_i))
+
+for (i in 1:length(files_i)) {
+  homer_o[[i]] <- read_delim(file.path(file_dir, paste0(files_i[i], "/knownResults.txt")))
+}
+
+names(homer_o) <- files_i
+homer_o %>% lapply(dim)
+
+# There are spaces in the colnames and also "-" values which confuses a lot of downstream functions beause it could be a minus. Example is "Log P-value" and "% of Target Sequences with Motif"
+# change column names
+
+homer_o %>%
+  lapply(function(x) {
+    colnames(x) <- colnames(x) %>% gsub(" ", ".", .)
+    colnames(x) <- colnames(x) %>% gsub("-", "", .)
+    x
+  }) %>%
+  lapply(head)
+
+
+homer_o <- homer_o %>% lapply(function(x) {
+  colnames(x) <- colnames(x) %>% gsub(" ", ".", .)
+  colnames(x) <- colnames(x) %>% gsub("-", "", .)
+  x <- x %>% separate(col = "Motif.Name", c("name", "moreinfo", "Homer"), sep = "/", remove = FALSE)
+
+  x$data <- x$moreinfo %>%
+    gsub(".*\\(", "", .) %>%
+    gsub("\\)", "", .)
+
+  x$TF_type <- x$name %>%
+    gsub(".*\\(", "", .) %>%
+    gsub("\\)", "", .)
+
+  x$TF <- x$name %>%
+    gsub("\\(.*", "", .)
+
+  x$tissue <- x$moreinfo %>%
+    gsub("-.*", "", .)
+
+  x <- x %>% unite(col = "TF_tissue", TF, tissue, remove = FALSE)
+
+  x$ranking <- 1:nrow(x)
+  # x$ranking <- nrow(x):1
+
+  x$`%.of.Target.Sequences.with.Motif` <- (x$`%.of.Target.Sequences.with.Motif` %>% gsub("%", "", .) %>% as.numeric()) / 100
+  x$`%.of.Background.Sequences.with.Motif` <- (x$`%.of.Background.Sequences.with.Motif` %>% gsub("%", "", .) %>% as.numeric()) / 100
+
+  x <- x %>% dplyr::mutate(enrichment_ratio = `%.of.Target.Sequences.with.Motif` / `%.of.Background.Sequences.with.Motif`)
+
+  x
+})
+
+# homer_o <- read.delim(file.path(file_dir, "PAR_LY_up/knownResults.txt"))
+```
+
+# plots
+
+
+```{r echo=FALSE, eval=FALSE}
+# decided not to do this
+# having enrichment ratio is better
+
+# ## just -log10 and ranked
+homer_o %>% length()
+options(ggrepel.max.overlaps = Inf)
+
+assign_plot <- paste0("a", 1:6)
+for (i in 1:6) {
+  assign(assign_plot[i], homer_o[[i]] %>% ggplot(aes(x = ranking, y = abs(Log.Pvalue), size = `%.of.Target.Sequences.with.Motif`)) +
+    geom_point(shape = 21, col = "dodgerblue3") +
+    ggtitle(names(homer_o)[i]) +
+    # geom_text(data = homer_o %>% head(n = 15), aes(label = TF), size = 3.5, label.padding = 1) +
+    #  geom_text_repel(data = homer_o %>% head(n = 15), aes(label = TF), size = 3.5) +
+    geom_text_repel(data = homer_o[[i]] %>% head(n = 15), aes(label = TF), size = 5, box.padding = 1.2, col = "orange") +
+    theme_bw() +
+    theme(
+      axis.text = element_text(size = 15),
+      axis.title = element_text(size = 15),
+      legend.position = "bottom", legend.title = element_blank(),
+      plot.title = element_text(hjust = 0.5, size = 20)
+    ))
+}
+
+plot_grid(a1, a2)
+plot_grid(a3, a4)
+plot_grid(a5, a6)
+```
+
+
+
+```{r}
+options(ggrepel.max.overlaps = Inf)
+
+assign_plot <- paste0("a", 1:6)
+for (i in 1:6) {
+  assign(assign_plot[i], homer_o[[i]] %>% ggplot(aes(x = enrichment_ratio, y = abs(Log.Pvalue))) +
+    geom_point(shape = 21, col = "dodgerblue3") +
+    ylab("-log10 pvalue") +
+    ggtitle(names(homer_o)[i]) +
+    # geom_text(data = homer_o %>% head(n = 15), aes(label = TF), size = 3.5, label.padding = 1) +
+    #  geom_text_repel(data = homer_o %>% head(n = 15), aes(label = TF), size = 3.5) +
+    geom_text_repel(data = homer_o[[i]] %>% head(n = 18), aes(label = TF), size = 5, box.padding = 1.2, col = "orange") +
+    theme_bw() +
+    theme(
+      axis.text = element_text(size = 15),
+      axis.title = element_text(size = 15),
+      legend.position = "bottom", legend.title = element_blank(),
+      plot.title = element_text(hjust = 0.5, size = 15)
+    ))
+}
+```
+
+
+```{r fig.width=10, fig.height = 12}
+plot_grid(a1, a3, a5)
+plot_grid(a2, a4, a6)
+```
+
+
+## AP-1
+
+
+```{r}
+TF_i <- c("AP-1", "JunB", "Jun-AP1", "Fos", "Fra1", "Fra2", "Atf3", "Fosl2")
+
+assign_plot <- paste0("a", 1:6)
+for (i in 1:6) {
+  assign(assign_plot[i], homer_o[[i]] %>% ggplot(aes(x = enrichment_ratio, y = abs(Log.Pvalue))) +
+    geom_point(col = "dodgerblue3", size = 7) +
+    ylab("-log10 pvalue") +
+    ggtitle(names(homer_o)[i]) +
+    # geom_text(data = homer_o %>% head(n = 15), aes(label = TF), size = 3.5, label.padding = 1) +
+    #  geom_text_repel(data = homer_o %>% head(n = 15), aes(label = TF), size = 3.5) +
+    geom_text_repel(data = homer_o[[i]] %>% head(n = 30) %>% filter(TF %in% TF_i), aes(label = TF), size = 4, box.padding = 1.2, col = "orange") +
+    theme_prism() +
+    theme(
+      axis.text = element_text(size = 15),
+      axis.title = element_text(size = 15),
+      legend.position = "bottom", legend.title = element_blank(),
+      plot.title = element_text(hjust = 0.5, size = 15)
+    ))
+}
+```
+
+
+```{r fig.width=5, fig.height = 5}
+a1
+a3
+a5
+```
+
+
+```{r eval=FALSE, echo=FALSE}
+filenames <- files_i[c(1, 3, 5)]
+
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/paper_figures/figures_output"
+setwd(save_pdf_dir)
+
+pdf("overcomeresist_ATAC_uppeaks_HOMER_ParLY_vs_ParDMSO_up.pdf",
+  width = 6, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+a1
+dev.off()
+
+
+pdf("overcomeresist_ATAC_uppeaks_HOMER_LYRARC_vs_LYRDMSO_up.pdf",
+  width = 6, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+a3
+dev.off()
+
+pdf("overcomeresist_ATAC_uppeaks_HOMER_LYFRARC_vs_LYFRDMSO_up.pdf",
+  width = 6, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+a5
+dev.off()
+```

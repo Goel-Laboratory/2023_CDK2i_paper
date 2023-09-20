@@ -1,0 +1,125 @@
+---
+title: "Cistrome toolkit output figures"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+Information 
+- ARC is INX315
+
+# load libraries
+
+```{r echo=FALSE}
+.libPaths(c("/config/binaries/R/4.2.0/R_libraries", "/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/lib64/R/library"))
+# .libPaths(.libPaths()[2])
+```
+
+``` {r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(RColorBrewer)
+library(DESeq2)
+library(rcartocolor)
+library(ggprism)
+```
+
+
+# read files
+
+```{r results=FALSE, message=FALSE, warning=FALSE}
+file_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/paper_figures/data/cistrome"
+
+files_i <- list.files(file_dir)
+
+# change order to how i like it. PAR first, then LYR, LYFR then the LYR.LYFR
+# files_i <- files_i[c(1:4, 9:16, 5:8)]
+files_i <- files_i[c(3:1)]
+
+cistrome_o <- vector(mode = "list", length = length(files_i))
+
+for (i in 1:length(files_i)) {
+  cistrome_o[[i]] <- read_delim(file.path(file_dir, files_i[i]))
+}
+
+names(cistrome_o) <- files_i %>% gsub("_HOMER.bed_result.csv", "", .)
+```
+
+# plot 
+
+```{r}
+my_colors <- carto_pal(20, "Sunset") %>% rev()
+
+# prep
+cistrome_figs <- paste0("a", 1:3)
+
+
+for (i in 1:length(cistrome_o)) {
+  max_df <- cistrome_o[[i]] %>%
+    group_by(Factor) %>%
+    summarise(max = max(GIGGLE_score)) %>%
+    arrange(desc(max))
+
+
+  cistrome_o[[i]]$Factor <- factor(cistrome_o[[i]]$Factor, levels = max_df$Factor)
+  select_i <- levels(cistrome_o[[i]]$Factor) %>% head(n = 20)
+
+  assign(cistrome_figs[i], cistrome_o[[i]] %>%
+    filter(Factor %in% select_i) %>%
+    ggplot(aes(x = Factor, y = GIGGLE_score, col = Factor)) +
+    geom_point(size = 7) +
+    scale_color_manual(values = my_colors) +
+    theme_prism() +
+    theme(
+      axis.text.y = element_text(color = "black", size = 20),
+      axis.text.x = element_text(color = "black", size = 20, angle = 45, hjust = 1, vjust = 1),
+      axis.title.y = element_text(color = "black", size = 25),
+      axis.title.x = element_blank(),
+      legend.position = "none",
+      strip.text.x = element_text(size = 20)
+    ))
+}
+```
+
+```{r fig.width=10}
+a1
+a2
+a3
+```
+
+
+
+
+```{r eval=FALSE, echo=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/paper_figures/figures_output"
+setwd(save_pdf_dir)
+
+pdf("overcomeresist_ATAC_uppeaks_cistrome_ParLY_vs_ParDMSO_up.pdf",
+  width = 10, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+a1
+dev.off()
+
+
+pdf("overcomeresist_ATAC_uppeaks_cistrome_LYRARC_vs_LYRDMSO_up.pdf",
+  width = 10, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+a2
+dev.off()
+
+pdf("overcomeresist_ATAC_uppeaks_cistrome_LYFRARC_vs_LYFRDMSO_up.pdf",
+  width = 10, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+a3
+dev.off()
+```
+
+

@@ -1,0 +1,152 @@
+---
+title: "Violin plots"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+
+Information 
+- ARC is INX315
+
+# load libraries
+
+```{r echo=FALSE}
+.libPaths(c(
+  "/home/aahn/R/x86_64-pc-linux-gnu-library/4.2",
+  "/config/binaries/R/4.2.0/R_libraries",
+  "/config/binaries/R/4.2.0/lib64/R/library"
+))
+# .libPaths(.libPaths()[2])
+```
+
+``` {r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(RColorBrewer)
+library(cowplot)
+library(DT)
+library(cowplot)
+library(ggprism)
+library(ggpubr)
+```
+
+# load
+
+```{r echo=FALSE}
+# load previously analysed R dataset
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/1.overcome_resist_LYvsDMSO/1.overview/data/RData/overcome_resist.RData")
+```
+
+
+# down peaks
+
+```{r fig.width=8, fig.height = 5}
+boxplot_col <- c(
+  "PAR_DMSO" = "#00A8E3",
+  "PAR_LY" = "#872464",
+  "LYR_DMSO" = "#0070B9",
+  "LYR_ARC" = "#FFC541",
+  "LYFR_DMSO" = "#0070B9",
+  "LYFR_ARC" = "#FFC541"
+)
+
+a1 <- df_i_down %>% ggplot(aes(x = treatment_group, y = value, col = resist_treat)) +
+  geom_violin(show.legend = FALSE) +
+  geom_boxplot(width = 0.3) +
+  scale_color_manual(values = boxplot_col) +
+  ylab("normalised value (log2)") +
+  facet_grid(~resist, scales = "free") +
+  theme_prism() +
+  stat_compare_means(comparisons = list(c("DMSO", "treatment"))) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(size = 25),
+    legend.title = element_blank(),
+    axis.text.y = element_text(size = 20),
+    axis.text.x = element_text(size = 15),
+    strip.text.x = element_text(size = 20)
+  )
+
+a1
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+# ggsave(file="OV5398PDX_E2Fbarcode_test.svg", plot=a1, width=10, height=8)
+
+
+pdf(paste0("overcomeresist_ATAC_downpeaks_violin.pdf"),
+  width = 10, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+
+dev.off()
+```
+
+
+# up peaks
+
+```{r fig.width=8, fig.height = 5}
+boxplot_col <- c(
+  "PAR_DMSO" = "#00A8E3",
+  "PAR_LY" = "#872464",
+  "LYR_DMSO" = "#0070B9",
+  "LYR_ARC" = "#FFC541",
+  "LYFR_DMSO" = "#0070B9",
+  "LYFR_ARC" = "#FFC541"
+)
+
+a1 <- df_i_up %>% ggplot(aes(x = treatment_group, y = value, col = resist_treat)) +
+  geom_violin(show.legend = FALSE) +
+  geom_boxplot(width = 0.3) +
+  scale_color_manual(values = boxplot_col) +
+  ylab("normalised value (log2)") +
+  facet_grid(~resist, scales = "free") +
+  theme_prism() +
+  stat_compare_means(comparisons = list(c("DMSO", "treatment"))) +
+  # stat_compare_means(method = "anova") +
+  # stat_compare_means(comparisons = list(c("PAR", "LYR", "LYFR"))) +
+  # stat_compare_means(label = "p.format") +
+  #  axis.text.x = element_text(angle=45, hjust =1)
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(size = 25),
+    legend.title = element_blank(),
+    axis.text.y = element_text(size = 20),
+    axis.text.x = element_text(size = 15),
+    strip.text.x = element_text(size = 20)
+  )
+
+a1
+```
+
+
+```{r eval=FALSE, echo=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+# ggsave(file="OV5398PDX_E2Fbarcode_test.svg", plot=a1, width=10, height=8)
+
+
+pdf(paste0("overcomeresist_ATAC_uppeaks_violin.pdf"),
+  width = 10, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+
+dev.off()
+```

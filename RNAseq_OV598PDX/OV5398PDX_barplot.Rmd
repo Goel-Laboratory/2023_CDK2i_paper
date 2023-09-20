@@ -1,0 +1,290 @@
+---
+title: "OV5398PDX barplot"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+# load library and data
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r echo=FALSE, results=FALSE, message=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(msigdbr)
+library(ggdendro)
+library(GSVA)
+library(ggprism)
+```
+
+```{r echo=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/1.QC/data/RData/prep.RData")
+```
+
+# ssGSEA
+
+```{r message=FALSE, results=FALSE}
+# make senescence_markers_df into a list
+# mmust be an simpler way to do this ...
+GSEA.list <- vector(mode = "list", length = length(senescence_markers_df$gs_name %>% unique()))
+for (i in 1:length(senescence_markers_df$gs_name %>% unique())) {
+  GSEA.list[[i]] <- senescence_markers_df %>%
+    filter(gs_name == unique(senescence_markers_df$gs_name)[i]) %>%
+    .$gene_symbol
+}
+names(GSEA.list) <- senescence_markers_df$gs_name %>% unique()
+
+GSEA.list$Jochems <- NULL
+
+
+Senscore_ssGSEA <- gsva(expr = norm_mat_symbol, gset.idx.list = GSEA.list, mx.diff = TRUE, verbose = TRUE, parallel.sz = 2, method = "ssgsea") %>% data.frame()
+```
+
+
+```{r}
+# up scores
+rownames(Senscore_ssGSEA)
+index_up <- c(1, 3, 5, 6)
+index_down <- c(2, 4)
+```
+
+```{r}
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA[index_up, ] %>% as_tibble(rownames = "group")
+Senscore_ssGSEA_ggplot <- gather(Senscore_ssGSEA_ggplot, key = names, value = value, -group)
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA_ggplot %>% separate(names, c("treatment", "time", "animal", "replicate"), remove = FALSE)
+
+Senscore_ssGSEA_ggplot$treatment <- Senscore_ssGSEA_ggplot$treatment %>% factor(levels = c("control", "CDK2i200mpkQD", "CDK2i100mpkBID"))
+```
+
+```{r}
+my_comparisons <- list(
+  c("control", "CDK2i200mpkQD"),
+  c("control", "CDK2i100mpkBID")
+)
+
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+
+boxplot_col <- c(
+  "control" = "#0070B9",
+  "CDK2i200mpkQD" = "#FFC541",
+  "CDK2i100mpkBID" = "#872464"
+)
+
+Senscore_ssGSEA_ggplot %>% filter(group == "Casella_UP")
+# t.test(x = c( 0.1638525, 0.1832479, 0.1600299), y = c(0.3376492, 0.3420807, 0.3377224) )
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA_ggplot %>%
+  group_by(group) %>%
+  summarise(
+    names = names,
+    treatment = treatment,
+    time = time,
+    replicate = replicate,
+    value = value,
+    relative_value = value / abs(mean(value[treatment == "control"]))
+  )
+
+
+
+a1 <- Senscore_ssGSEA_ggplot %>%
+  ggplot(aes(x = treatment, y = relative_value)) +
+  # geom_boxplot(lwd=1, show.legend=FALSE) +
+  # geom_bar(stat="identity",
+  # position=position_dodge()) +
+  # geom_errorbar(aes(ymin=len-sd, ymax=len+sd), width=.2,
+  # position=position_dodge(.9))  +
+  # geom_errorbar() +
+  geom_bar(aes(fill = treatment),
+    stat = "summary", fun = "mean",
+    position = position_dodge(), width = 1, show.legend = FALSE
+  ) +
+  # stat_summary(fun=mean, geom="point", color="red") +
+  scale_fill_manual(values = boxplot_col) +
+  stat_compare_means(comparisons = my_comparisons, label = "p.format", method = "t.test", bracket.size = 1.5) +
+  geom_jitter(aes(col = treatment), size = 2, stroke = 3, color = "black") +
+  stat_summary(
+    fun.data = mean_sdl, fun.args = list(mult = 1),
+    geom = "errorbar", color = "black", width = 0.5, linewidth = 0.5
+  ) +
+  ylab("relative ssGSEA score") +
+  facet_grid(. ~ group) +
+  theme_prism() +
+  theme(
+    axis.text.y = element_text(color = "black", size = 15),
+    axis.text.x = element_text(color = "black", size = 15, angle = 45, hjust = 1, vjust = 1),
+    axis.title.y = element_text(color = "black", size = 20),
+    axis.title.x = element_blank(),
+    strip.text.x = element_text(size = 15)
+  )
+
+a1
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("OV5398PDX_ssGSEAsenscore_boxplot.pdf",
+  width = 12, # 5 x 300 pixels
+  height = 7
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+dev.off()
+```
+
+
+
+
+# BCL2L1 CDKN1A
+
+```{r}
+file_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/3.DGE/data/rds"
+
+DGE_list <- readRDS(file.path(file_dir, "DGE_list.rds"))
+```
+
+```{r results=FALSE}
+dds <- DESeqDataSetFromMatrix(fcounts_Fmat, colData = sample_information, design = ~treatment)
+dds <- DESeq(dds)
+
+norm_mat_symbol <- counts(dds, normalized = TRUE)
+rownames(norm_mat_symbol) <- t2g_aug2020$ext_gene[match(rownames(norm_mat_symbol), t2g_aug2020$ens_gene_ver)]
+
+
+normmat_ggplot_nonlog <- norm_mat_symbol %>% as.data.frame()
+normmat_ggplot_nonlog$genesym <- rownames(normmat_ggplot_nonlog)
+normmat_ggplot_nonlog <- gather(normmat_ggplot_nonlog, key = samples, value = values, -genesym)
+
+normmat_ggplot_nonlog <- normmat_ggplot_nonlog %>% separate(samples, into = c("treatment", "hrs.post.dose", "animal", "replicate"), sep = "_", remove = FALSE)
+normmat_ggplot_nonlog$treatment <- factor(normmat_ggplot_nonlog$treatment)
+normmat_ggplot_nonlog$replicate <- factor(normmat_ggplot_nonlog$replicate)
+normmat_ggplot_nonlog$treatment <- normmat_ggplot_nonlog$treatment %>% factor(levels = c("control", "CDK2i200mpkQD", "CDK2i100mpkBID"))
+```
+
+
+```{r}
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+boxplot_col <- c(
+  "control" = "#0070B9",
+  "CDK2i200mpkQD" = "#FFC541",
+  "CDK2i100mpkBID" = "#872464"
+)
+```
+
+```{r}
+ggplot_gene_relative <- function(genes) {
+  plot_df <- dplyr::filter(normmat_ggplot_nonlog, genesym %in% genes) %>% arrange(genesym)
+
+  plot_df <- plot_df %>%
+    group_by(genesym) %>%
+    summarise(
+      names = samples,
+      # status = status,
+      treatment = treatment,
+      replicate = replicate,
+      animal = animal,
+      hrs.post.dose = hrs.post.dose,
+      value = values,
+      relative_value = value / abs(mean(value[treatment == "control"]))
+    )
+
+  max_value <- max(plot_df$relative_value) + 0.1
+
+  pvalue_manual_1 <- DGE_list$CDK2i200mpkQD_vs_control %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "control", group2 = "CDK2i200mpkQD") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value)
+
+  pvalue_manual_2 <- DGE_list$CDK2i100mpkBID_vs_control %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "control", group2 = "CDK2i100mpkBID") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value + 0.1)
+
+  pvalue_manual <- rbind(pvalue_manual_1, pvalue_manual_2)
+
+  a1 <- plot_df %>%
+    ggplot(aes(x = treatment, y = relative_value)) +
+    geom_bar(aes(fill = treatment),
+      stat = "summary", fun = "mean",
+      position = position_dodge(), width = 1, show.legend = FALSE
+    ) +
+    stat_summary(
+      fun.data = mean_sdl, fun.args = list(mult = 1),
+      geom = "errorbar", color = "black", width = 0.5, linewidth = 0.5
+    ) +
+    # stat_summary(fun=mean, geom="point", color="red") +
+    scale_fill_manual(values = boxplot_col) +
+    stat_pvalue_manual(pvalue_manual, label = "padj", bracket.size = 1.5) +
+    # stat_compare_means(comparisons = my_comparisons, label = "p.format", method = "t.test", bracket.size = 1.5) +
+    geom_jitter(aes(col = treatment), size = 2, stroke = 3, color = "black") +
+    ylab("relative mRNA expression") +
+    facet_grid(. ~ genesym) +
+    theme_prism() +
+    theme(
+      axis.text.y = element_text(color = "black", size = 15),
+      axis.text.x = element_text(color = "black", size = 15, angle = 45, hjust = 1, vjust = 1),
+      axis.title.y = element_text(color = "black", size = 20),
+      axis.title.x = element_blank(),
+      strip.text.x = element_text(size = 15)
+    )
+
+  print(a1)
+}
+```
+
+```{r}
+ggplot_gene_relative(genes = c("BCL2L1", "CDKN1A"))
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("OV5398PDX_BCL2L1.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+ggplot_gene_relative("BCL2L1")
+
+dev.off()
+
+pdf("OV5398PDX_CDKN1A.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+ggplot_gene_relative("CDKN1A")
+
+dev.off()
+```
+
+
+

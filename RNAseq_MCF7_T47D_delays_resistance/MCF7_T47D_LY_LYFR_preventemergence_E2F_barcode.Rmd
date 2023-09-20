@@ -1,0 +1,600 @@
+---
+title: "MCF7 T47D E2F barcode"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+
+# load library
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r include = FALSE, message=FALSE}
+# load library
+
+library(tidyverse)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(pheatmap)
+library(gplots)
+library(ComplexHeatmap)
+library(msigdbr)
+library(ggpubr)
+library(clusterProfiler)
+library(enrichplot)
+```
+
+
+```{r echo=FALSE}
+# from preparation file
+load(file = "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M/antonioahn/preparation/data/preparation.RData")
+
+load("/researchers/antonio.ahn/general/R/Download_resources/RData/mart_apr2019.RData")
+load("/researchers/antonio.ahn/general/R/Download_resources/RData/mart_aug2020.RData")
+```
+
+# preparation
+
+```{r}
+# barcode plot setup
+# idea from # https://github.com/YuLab-SMU/DOSE/issues/23
+
+# from https://github.com/YuLab-SMU/enrichplot/blob/devel/R/gseaplot.R
+gsInfo <- function(object, geneSetID) {
+  geneList <- object@geneList
+
+  if (is.numeric(geneSetID)) {
+    geneSetID <- object@result[geneSetID, "ID"]
+  }
+
+  geneSet <- object@geneSets[[geneSetID]]
+  exponent <- object@params[["exponent"]]
+  df <- gseaScores(geneList, geneSet, exponent, fortify = TRUE)
+  df$ymin <- 0
+  df$ymax <- 0
+  pos <- df$position == 1
+  h <- diff(range(df$runningScore)) / 20
+  df$ymin[pos] <- -h
+  df$ymax[pos] <- h
+  df$geneList <- geneList
+  if (length(object@gene2Symbol) == 0) {
+    df$gene <- names(geneList)
+  } else {
+    df$gene <- object@gene2Symbol[names(geneList)]
+  }
+
+  df$Description <- object@result[geneSetID, "Description"]
+  return(df)
+}
+
+# https://rdrr.io/bioc/DOSE/src/R/gsea.R
+gseaScores <- function(geneList, geneSet, exponent = 1, fortify = FALSE) {
+  ###################################################################
+  ##    geneList                                                   ##
+  ##                                                               ##
+  ## 1. Rank order the N genes in D to form L = { g_1, ... , g_N}  ##
+  ##    according to the correlation, r(g_j)=r_j,                  ##
+  ##    of their expression profiles with C.                       ##
+  ##                                                               ##
+  ###################################################################
+
+  ###################################################################
+  ##    exponent                                                   ##
+  ##                                                               ##
+  ## An exponent p to control the weight of the step.              ##
+  ##   When p = 0, Enrichment Score ( ES(S) ) reduces to           ##
+  ##   the standard Kolmogorov-Smirnov statistic.                  ##
+  ##   When p = 1, we are weighting the genes in S                 ##
+  ##   by their correlation with C normalized                      ##
+  ##   by the sum of the correlations over all of the genes in S.  ##
+  ##                                                               ##
+  ###################################################################
+
+  ## genes defined in geneSet should appear in geneList.
+  ## this is a must, see https://github.com/GuangchuangYu/DOSE/issues/23
+  geneSet <- intersect(geneSet, names(geneList))
+
+  N <- length(geneList)
+  Nh <- length(geneSet)
+
+  Phit <- Pmiss <- numeric(N)
+  hits <- names(geneList) %in% geneSet ## logical
+
+  Phit[hits] <- abs(geneList[hits])^exponent
+  NR <- sum(Phit)
+  Phit <- cumsum(Phit / NR)
+
+  Pmiss[!hits] <- 1 / (N - Nh)
+  Pmiss <- cumsum(Pmiss)
+
+  runningES <- Phit - Pmiss
+
+  ## ES is the maximum deviation from zero of Phit-Pmiss
+  max.ES <- max(runningES)
+  min.ES <- min(runningES)
+  if (abs(max.ES) > abs(min.ES)) {
+    ES <- max.ES
+  } else {
+    ES <- min.ES
+  }
+
+  df <- data.frame(
+    x = seq_along(runningES),
+    runningScore = runningES,
+    position = as.integer(hits)
+  )
+
+  if (fortify == TRUE) {
+    return(df)
+  }
+
+  df$gene <- names(geneList)
+  res <- list(ES = ES, runningES = df)
+  return(res)
+}
+```
+
+# DGE
+
+from /researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M/2.DE/AntonioAhn/220801_MCF7M_LY_LYFR_preparation.Rmd
+
+
+
+```{r, echo=FALSE}
+annotation_res <- function(res_input, temp_input) {
+  res_input$logFC_MMSE <- temp_input$log2FoldChange
+  res_input$lfcSE_MMSE <- temp_input$lfcSE
+  res_input$svalue <- temp_input$svalue
+
+  colnames(res_input)[colnames(res_input) == "log2FoldChange"] <- "logFC_MLE"
+  colnames(res_input)[colnames(res_input) == "lfcSE"] <- "lfcSE_MLE"
+
+
+  res_input <- as_tibble(res_input, rownames = "ens_gene_ver")
+  res_input$ens_gene <- gsub("\\..*", "", res_input$ens_gene_ver)
+
+  res_input <- res_input[order(res_input$pvalue), ]
+
+  ## -------------------------------
+  # adding gene annotation such as gene name, lncRNA or pc gene? (using gene_biotype_2020), lncRNA biotype info (using gene_biotype_2019)
+  table(res_input$ens_gene_ver %in% t2g_aug2020$ens_gene_ver)
+  # adding gene name
+  res_input$SYMBOL <- t2g_aug2020$ext_gene[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+  res_input$entrez <- t2g_aug2020$entrez_gene[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+
+  # adding gene_biotype information from t2g_aug2020
+  res_input$gene_biotype_2020 <- t2g_aug2020$gene_biotype[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+
+  # adding gene_biotype information from t2g_apr2019, but only available for 20,300  genes
+  # FALSE  TRUE
+  #  262 18136
+  table(res_input$ens_gene %in% t2g_apr2019$ens_gene)
+  res_input$gene_biotype_2019 <- t2g_apr2019$gene_biotype[match(res_input$ens_gene, t2g_apr2019$ens_gene)]
+
+  # adding in gene location information
+  res_input$chromosome_name <- t2g_aug2020$chromosome_name[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+  res_input$band <- t2g_aug2020$band[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+  res_input$start_position <- t2g_aug2020$start_position[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+  res_input$end_position <- t2g_aug2020$end_position[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+  res_input$strand <- t2g_aug2020$strand[match(res_input$ens_gene_ver, t2g_aug2020$ens_gene_ver)]
+
+  res_input$sig <- ifelse(res_input$padj < 0.05, "Yes", "No")
+
+  res_input
+}
+```
+
+
+```{r, message = FALSE}
+# cellline names
+cl_names <- c("MCF7M", "T47D")
+DE_list <- c()
+
+for (i in cl_names) {
+  dds <- DESeqDataSetFromMatrix(fcounts_Fmat_list[[i]],
+    colData = sample_information_list[[i]],
+    design = ~ 0 + resist_treat
+  )
+
+  dds <- DESeq(dds)
+  resultsNames(dds)
+
+  # Initialising
+  DGE_list_LFC0 <- vector(mode = "list", length = 2)
+
+  resultsNames(dds)
+  contrast_list <- list(
+    c("PAR_DMSO", "PAR_LY"),
+    c("PAR_LY", "PAR_LY.ARC")
+  )
+
+  for (j in 1:length(DGE_list_LFC0)) {
+    DGE_list_LFC0[[j]] <- results(dds, contrast = c("resist_treat", contrast_list[[j]][[2]], contrast_list[[j]][[1]]), alpha = 0.05, lfcThreshold = 0)
+
+    temp <- lfcShrink(dds, contrast = c("resist_treat", contrast_list[[j]][[2]], contrast_list[[j]][[1]]), type = "ashr", res = DGE_list_LFC0[[j]], lfcThreshold = 0)
+
+    DE_list[[i]][[j]] <- annotation_res(DGE_list_LFC0[[j]], temp)
+  }
+}
+
+# changing names
+contrast_list <- list(
+  c("PAR_DMSO", "PAR_LY"),
+  c("PAR_LY", "PAR_LY.ARC")
+)
+
+new_names <- c()
+for (i in 1:length(contrast_list)) {
+  new_names <- c(new_names, paste0(contrast_list[[i]][2], "_vs_", contrast_list[[i]][1]))
+}
+new_names
+
+names(DE_list$MCF7M) <- new_names
+names(DE_list$T47D) <- new_names
+```
+
+# MCF7M 
+
+## MCF7M Run GSEA
+
+```{r}
+GSEA_get_ranks <- function(res_input) {
+  res_GSEA <- res_input %>%
+    dplyr::select(SYMBOL, logFC_MMSE) %>%
+    na.omit() %>% # remove NA
+    distinct() %>% # remove duplicated
+    group_by(SYMBOL) %>%
+    summarize(logFC_MMSE = mean(logFC_MMSE))
+
+  deframe(res_GSEA)
+}
+
+res_names <- DE_list$MCF7M %>% names()
+GSEA_ranks_MCF7M <- vector(mode = "list", length = length(DE_list$MCF7M))
+for (i in 1:length(GSEA_ranks_MCF7M)) {
+  GSEA_ranks_MCF7M[[i]] <- GSEA_get_ranks(DE_list$MCF7M[[i]])
+}
+names(GSEA_ranks_MCF7M) <- res_names
+```
+
+```{r echo=FALSE, message=FALSE}
+# running all MSigDB.ofinteresttogether before
+gsea_output_MCF7M <- vector(mode = "list", length = length(GSEA_ranks_MCF7M))
+
+for (i in 1:length(GSEA_ranks_MCF7M)) {
+  gsea_output_MCF7M[[i]] <- GSEA(sort(GSEA_ranks_MCF7M[[i]], decreasing = TRUE), TERM2GENE = h_gene_sets, pvalueCutoff = 1.0, eps = 0)
+}
+
+names(gsea_output_MCF7M) <- res_names
+
+gsea_df_MCF7M <- gsea_output_MCF7M %>% lapply(function(x) {
+  x %>% as_tibble()
+})
+```
+
+## barcode, combine comparisons
+
+```{r}
+barcode_1 <- gsInfo(gsea_output_MCF7M$PAR_LY_vs_PAR_DMSO, geneSetID = c("HALLMARK_E2F_TARGETS"))
+barcode_2 <- gsInfo(gsea_output_MCF7M$PAR_LY.ARC_vs_PAR_LY, geneSetID = c("HALLMARK_E2F_TARGETS"))
+
+
+barcode_1 %>% ggplot(aes(x = x, y = runningScore)) +
+  geom_line(alpha = 0.95, size = 0.7, col = "orange") +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.2) +
+  ggtitle("HALLMARK_E2F_TARGETS") +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Enrichment score (ES)") +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  theme(
+    plot.title.position = "plot",
+    axis.text = element_text(size = 9),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black")
+  )
+
+
+barcode_2 %>% ggplot(aes(x = x, y = runningScore)) +
+  geom_line(alpha = 0.95, size = 0.7, col = "orange") +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.2) +
+  ggtitle("HALLMARK_E2F_TARGETS") +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Running Enrichment score") +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  theme(
+    plot.title.position = "plot",
+    axis.text = element_text(size = 9),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black")
+  )
+```
+
+```{r}
+barcode_1$group <- c("PAR_LY_vs_PAR_DMSO")
+barcode_2$group <- c("PAR_LY.ARC_vs_PAR_LY")
+
+# barcode_comb <- rbind(barcode_1, barcode_2) %>% rbind(barcode_3)
+barcode_1_2 <- rbind(barcode_1, barcode_2)
+```
+
+## barcode_1_2
+
+```{r fig.width=12, fig.height=8}
+# library(rcartocolor)
+# safe_col = carto_pal(12, "Safe")
+
+# incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+incyclix_col <- c(
+  "PAR_LY_vs_PAR_DMSO" = "#00A8E3",
+  "PAR_LY.ARC_vs_PAR_LY" = "#872464"
+)
+# "LYFR_DMSO_vs_PAR_LY" = "#FFC541")
+
+
+# incyclix_col %>% show_col
+comparison_group <- c("PAR_LY_vs_PAR_DMSO", "PAR_LY.ARC_vs_PAR_LY")
+
+barcode_col <- incyclix_col[names(incyclix_col) %in% comparison_group]
+
+index <- names(gsea_output_MCF7M) %in% comparison_group
+
+title_numbers <- gsea_output_MCF7M[index] %>%
+  lapply(function(x) {
+    x %>%
+      as_tibble() %>%
+      filter(ID == "HALLMARK_E2F_TARGETS") %>%
+      dplyr::select(NES, p.adjust)
+  }) %>%
+  unlist() %>%
+  as.numeric()
+
+title_numbers <- title_numbers %>%
+  signif(digits = 3) %>%
+  as.character()
+
+ggplot_title <- c("MCF7M HALLMARK_E2F_TARGETS", title_numbers) %>% paste(collapse = " ")
+
+barcode_1_2$group <- barcode_1_2$group %>% factor(level = comparison_group)
+
+a1 <- barcode_1_2 %>% ggplot(aes(x = x, y = runningScore, col = group)) +
+  geom_line(alpha = 0.95, size = 3) +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.4) +
+  ggtitle(ggplot_title) +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Running Enrichment score") +
+  scale_color_manual(values = barcode_col) +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  # theme(panel.background = element_rect(fill = "white")) +
+  theme(
+    axis.text = element_text(size = 15),
+    axis.title = element_text(size = 20),
+    plot.title = element_text(hjust = 0.5),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black"),
+    legend.title = element_blank()
+  )
+
+a1
+#        panel.grid.major = element_blank(),
+#        panel.grid.minor = element_blank()
+```
+
+
+
+
+
+# T47D 
+
+## T47D Run GSEA
+
+```{r}
+GSEA_get_ranks <- function(res_input) {
+  res_GSEA <- res_input %>%
+    dplyr::select(SYMBOL, logFC_MMSE) %>%
+    na.omit() %>% # remove NA
+    distinct() %>% # remove duplicated
+    group_by(SYMBOL) %>%
+    summarize(logFC_MMSE = mean(logFC_MMSE))
+
+  deframe(res_GSEA)
+}
+
+res_names <- DE_list$T47D %>% names()
+GSEA_ranks_T47D <- vector(mode = "list", length = length(DE_list$T47D))
+for (i in 1:length(GSEA_ranks_T47D)) {
+  GSEA_ranks_T47D[[i]] <- GSEA_get_ranks(DE_list$T47D[[i]])
+}
+names(GSEA_ranks_T47D) <- res_names
+```
+
+```{r echo=FALSE, message=FALSE}
+# running all MSigDB.ofinteresttogether before
+gsea_output_T47D <- vector(mode = "list", length = length(GSEA_ranks_T47D))
+
+for (i in 1:length(GSEA_ranks_T47D)) {
+  gsea_output_T47D[[i]] <- GSEA(sort(GSEA_ranks_T47D[[i]], decreasing = TRUE), TERM2GENE = h_gene_sets, pvalueCutoff = 1.0, eps = 0)
+}
+
+names(gsea_output_T47D) <- res_names
+
+gsea_df_T47D <- gsea_output_T47D %>% lapply(function(x) {
+  x %>% as_tibble()
+})
+```
+
+## barcode, combine comparisons
+
+```{r results=FALSE}
+barcode_1 <- gsInfo(gsea_output_T47D$PAR_LY_vs_PAR_DMSO, geneSetID = c("HALLMARK_E2F_TARGETS"))
+barcode_2 <- gsInfo(gsea_output_T47D$PAR_LY.ARC_vs_PAR_LY, geneSetID = c("HALLMARK_E2F_TARGETS"))
+
+
+barcode_1 %>% ggplot(aes(x = x, y = runningScore)) +
+  geom_line(alpha = 0.95, size = 0.7, col = "orange") +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.2) +
+  ggtitle("HALLMARK_E2F_TARGETS") +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Enrichment score (ES)") +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  theme(
+    plot.title.position = "plot",
+    axis.text = element_text(size = 9),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black")
+  )
+
+
+barcode_2 %>% ggplot(aes(x = x, y = runningScore)) +
+  geom_line(alpha = 0.95, size = 0.7, col = "orange") +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.2) +
+  ggtitle("HALLMARK_E2F_TARGETS") +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Running Enrichment score") +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  theme(
+    plot.title.position = "plot",
+    axis.text = element_text(size = 9),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black")
+  )
+```
+
+```{r}
+barcode_1$group <- c("PAR_LY_vs_PAR_DMSO")
+barcode_2$group <- c("PAR_LY.ARC_vs_PAR_LY")
+
+# barcode_comb <- rbind(barcode_1, barcode_2) %>% rbind(barcode_3)
+barcode_1_2 <- rbind(barcode_1, barcode_2)
+```
+
+## barcode_1_2
+
+```{r fig.width=12, fig.height=8}
+# library(rcartocolor)
+# safe_col = carto_pal(12, "Safe")
+
+# incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+incyclix_col <- c(
+  "PAR_LY_vs_PAR_DMSO" = "#00A8E3",
+  "PAR_LY.ARC_vs_PAR_LY" = "#872464"
+)
+# "LYFR_DMSO_vs_PAR_LY" = "#FFC541")
+
+
+# incyclix_col %>% show_col
+comparison_group <- c("PAR_LY_vs_PAR_DMSO", "PAR_LY.ARC_vs_PAR_LY")
+
+barcode_col <- incyclix_col[names(incyclix_col) %in% comparison_group]
+
+index <- names(gsea_output_T47D) %in% comparison_group
+
+title_numbers <- gsea_output_T47D[index] %>%
+  lapply(function(x) {
+    x %>%
+      as_tibble() %>%
+      filter(ID == "HALLMARK_E2F_TARGETS") %>%
+      dplyr::select(NES, p.adjust)
+  }) %>%
+  unlist() %>%
+  as.numeric()
+
+title_numbers <- title_numbers %>%
+  signif(digits = 3) %>%
+  as.character()
+
+ggplot_title <- c("T47D HALLMARK_E2F_TARGETS", title_numbers) %>% paste(collapse = " ")
+
+barcode_1_2$group <- barcode_1_2$group %>% factor(level = comparison_group)
+
+a2 <- barcode_1_2 %>% ggplot(aes(x = x, y = runningScore, col = group)) +
+  geom_line(alpha = 0.95, size = 3) +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.4) +
+  ggtitle(ggplot_title) +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Running Enrichment score") +
+  scale_color_manual(values = barcode_col) +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  # theme(panel.background = element_rect(fill = "white")) +
+  theme(
+    axis.text = element_text(size = 15),
+    axis.title = element_text(size = 20),
+    plot.title = element_text(hjust = 0.5),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black"),
+    legend.title = element_blank()
+  )
+
+a2
+#        panel.grid.major = element_blank(),
+#        panel.grid.minor = element_blank()
+```
+
+
+
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/2.prevent_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("preventresist_MCF7M_E2Ftarget_barcode_LYR_DMSO_vs_PAR_LY.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+dev.off()
+
+
+pdf("preventresist_T47D_E2Ftarget_barcode_LYR_DMSO_vs_PAR_LY.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+
+a2
+
+dev.off()
+```
+
+
+
+

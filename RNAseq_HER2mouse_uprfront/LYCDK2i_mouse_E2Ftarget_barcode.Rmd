@@ -1,0 +1,245 @@
+---
+title: "HER2 mouse barcode"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+
+# load library and data
+
+```{r echo=FALSE, results=FALSE, message=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(msigdbr)
+library(ggdendro)
+library(rcartocolor)
+library(ComplexHeatmap)
+```
+
+```{r echo=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230614_ABEMA_ARC_COMBO_VEH_primary_mouse_tumour/R_analysis/1.QC_prep/data/RData/prep.RData")
+```
+
+```{r echo=FALSE}
+gsea_output_HM <- readRDS("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230720_ABEMA_ARC_COMBO_VEH_primary_mouse_tumour_upfront/R_analysis/4.GSEA/data/rds/gesea_output.rds")
+
+gsea_df_HM <- gsea_output_HM %>% lapply(function(x) {
+  x %>% as_tibble()
+})
+```
+
+# preparation for barcode 
+```{r}
+# barcode plot setup
+# idea from # https://github.com/YuLab-SMU/DOSE/issues/23
+
+# from https://github.com/YuLab-SMU/enrichplot/blob/devel/R/gseaplot.R
+gsInfo <- function(object, geneSetID) {
+  geneList <- object@geneList
+
+  if (is.numeric(geneSetID)) {
+    geneSetID <- object@result[geneSetID, "ID"]
+  }
+
+  geneSet <- object@geneSets[[geneSetID]]
+  exponent <- object@params[["exponent"]]
+  df <- gseaScores(geneList, geneSet, exponent, fortify = TRUE)
+  df$ymin <- 0
+  df$ymax <- 0
+  pos <- df$position == 1
+  h <- diff(range(df$runningScore)) / 20
+  df$ymin[pos] <- -h
+  df$ymax[pos] <- h
+  df$geneList <- geneList
+  if (length(object@gene2Symbol) == 0) {
+    df$gene <- names(geneList)
+  } else {
+    df$gene <- object@gene2Symbol[names(geneList)]
+  }
+
+  df$Description <- object@result[geneSetID, "Description"]
+  return(df)
+}
+
+# https://rdrr.io/bioc/DOSE/src/R/gsea.R
+gseaScores <- function(geneList, geneSet, exponent = 1, fortify = FALSE) {
+  ###################################################################
+  ##    geneList                                                   ##
+  ##                                                               ##
+  ## 1. Rank order the N genes in D to form L = { g_1, ... , g_N}  ##
+  ##    according to the correlation, r(g_j)=r_j,                  ##
+  ##    of their expression profiles with C.                       ##
+  ##                                                               ##
+  ###################################################################
+
+  ###################################################################
+  ##    exponent                                                   ##
+  ##                                                               ##
+  ## An exponent p to control the weight of the step.              ##
+  ##   When p = 0, Enrichment Score ( ES(S) ) reduces to           ##
+  ##   the standard Kolmogorov-Smirnov statistic.                  ##
+  ##   When p = 1, we are weighting the genes in S                 ##
+  ##   by their correlation with C normalized                      ##
+  ##   by the sum of the correlations over all of the genes in S.  ##
+  ##                                                               ##
+  ###################################################################
+
+  ## genes defined in geneSet should appear in geneList.
+  ## this is a must, see https://github.com/GuangchuangYu/DOSE/issues/23
+  geneSet <- intersect(geneSet, names(geneList))
+
+  N <- length(geneList)
+  Nh <- length(geneSet)
+
+  Phit <- Pmiss <- numeric(N)
+  hits <- names(geneList) %in% geneSet ## logical
+
+  Phit[hits] <- abs(geneList[hits])^exponent
+  NR <- sum(Phit)
+  Phit <- cumsum(Phit / NR)
+
+  Pmiss[!hits] <- 1 / (N - Nh)
+  Pmiss <- cumsum(Pmiss)
+
+  runningES <- Phit - Pmiss
+
+  ## ES is the maximum deviation from zero of Phit-Pmiss
+  max.ES <- max(runningES)
+  min.ES <- min(runningES)
+  if (abs(max.ES) > abs(min.ES)) {
+    ES <- max.ES
+  } else {
+    ES <- min.ES
+  }
+
+  df <- data.frame(
+    x = seq_along(runningES),
+    runningScore = runningES,
+    position = as.integer(hits)
+  )
+
+  if (fortify == TRUE) {
+    return(df)
+  }
+
+  df$gene <- names(geneList)
+  res <- list(ES = ES, runningES = df)
+  return(res)
+}
+
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+```
+
+
+
+## barcode, combine comparisons
+
+```{r}
+barcode_1 <- gsInfo(gsea_output_HM$LY_vs_Veh, geneSetID = c("HALLMARK_E2F_TARGETS"))
+barcode_2 <- gsInfo(gsea_output_HM$LY.INX_vs_LY, geneSetID = c("HALLMARK_E2F_TARGETS"))
+
+barcode_1$group <- c("LY_vs_Veh")
+barcode_2$group <- c("LY.INX_vs_LY")
+
+# barcode_comb <- rbind(barcode_1, barcode_2) %>% rbind(barcode_3)
+barcode_1_2 <- rbind(barcode_1, barcode_2)
+```
+
+## barcode_1_2
+
+```{r fig.width=12, fig.height=8}
+# library(rcartocolor)
+# safe_col = carto_pal(12, "Safe")
+
+# incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+incyclix_col <- c(
+  "LY_vs_Veh" = "#00A8E3",
+  "LY.INX_vs_LY" = "#872464"
+)
+
+
+# incyclix_col %>% show_col
+comparison_group <- c("LY_vs_Veh", "LY.INX_vs_LY")
+
+barcode_col <- incyclix_col[names(incyclix_col) %in% comparison_group]
+
+index <- names(gsea_output_HM) %in% comparison_group
+
+title_numbers <- gsea_output_HM[index] %>%
+  lapply(function(x) {
+    x %>%
+      as_tibble() %>%
+      filter(ID == "HALLMARK_E2F_TARGETS") %>%
+      dplyr::select(NES, p.adjust)
+  }) %>%
+  unlist() %>%
+  as.numeric()
+
+
+
+title_numbers <- title_numbers %>%
+  signif(digits = 3) %>%
+  as.character()
+
+ggplot_title <- c("HALLMARK_E2F_TARGETS", title_numbers) %>% paste(collapse = " ")
+
+barcode_1_2$group <- barcode_1_2$group %>% factor(level = comparison_group)
+
+a1 <- barcode_1_2 %>% ggplot(aes(x = x, y = runningScore, col = group)) +
+  geom_line(alpha = 0.95, size = 3) +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.4) +
+  ggtitle(ggplot_title) +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Running Enrichment score") +
+  scale_color_manual(values = barcode_col) +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  # theme(panel.background = element_rect(fill = "white")) +
+  theme(
+    axis.text = element_text(size = 15),
+    axis.title = element_text(size = 20),
+    plot.title = element_text(hjust = 0.5),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black"),
+    legend.title = element_blank()
+  )
+
+a1
+#        panel.grid.major = element_blank(),
+#        panel.grid.minor = element_blank()
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230720_ABEMA_ARC_COMBO_VEH_primary_mouse_tumour_upfront/R_analysis/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("HER2mouse_preventresist_E2Ftarget_barcode.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+dev.off()
+```

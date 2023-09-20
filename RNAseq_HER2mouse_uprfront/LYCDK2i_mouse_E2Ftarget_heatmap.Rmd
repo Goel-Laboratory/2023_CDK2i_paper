@@ -1,0 +1,63 @@
+---
+title: "HER2 mouse heatmap"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+
+# load library and data
+
+```{r echo=FALSE, results=FALSE, message=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(msigdbr)
+library(ggdendro)
+library(rcartocolor)
+library(ComplexHeatmap)
+library(circlize)
+```
+
+```{r echo=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230720_ABEMA_ARC_COMBO_VEH_primary_mouse_tumour_upfront/R_analysis/1.QC_prep/data/RData/prep.RData")
+```
+
+
+# CHM
+
+```{r}
+make_heatmap_symbol_CHM(filter(h_gene_sets, gs_name == "HALLMARK_E2F_TARGETS")$gene_symbol, kmeansrows_number = 1)
+```
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230720_ABEMA_ARC_COMBO_VEH_primary_mouse_tumour_upfront/R_analysis/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("HER2mouse_preventresist_E2Ftarget_heatmap.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+
+make_heatmap_symbol_CHM(filter(h_gene_sets, gs_name == "HALLMARK_E2F_TARGETS")$gene_symbol, kmeansrows_number = 1)
+
+
+dev.off()
+```
+
+

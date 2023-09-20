@@ -1,0 +1,544 @@
+---
+title: "MCF7 T47D barplots"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+# load library
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r include=FALSE, message=FALSE}
+# load library
+
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(gplots)
+library(clusterProfiler)
+library(ComplexHeatmap)
+library(UpSetR)
+library(GSVA)
+library(ggprism)
+```
+
+
+```{r echo=FALSE}
+# from preparation file
+# why did i load this one before?
+# load(file = "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M/antonioahn/preparation/data/preparation.RData")
+
+load(file = "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/preparation/data/preparation.RData")
+load("/researchers/antonio.ahn/general/R/Download_resources/RData/mart_apr2019.RData")
+load("/researchers/antonio.ahn/general/R/Download_resources/RData/mart_aug2020.RData")
+```
+
+
+```{r echo=FALSE}
+# load DESeq2 output tables to get adjusted pvalues
+file_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/2.DE/data/rds"
+
+DGE_list <- readRDS(file.path(file_dir, "DE_list.rds"))
+```
+
+
+```{r results=FALSE}
+norm_mat_list_sub <- c()
+
+for (i in 1:length(fcounts_Fmat_list)) {
+  dds <- DESeqDataSetFromMatrix(fcounts_Fmat_list[[i]], colData = sample_information_list[[i]], design = ~resist_treat)
+  dds <- DESeq(dds)
+
+  norm_mat <- counts(dds, normalized = TRUE)
+
+  rownames(norm_mat) <- t2g_aug2020$ext_gene[match(rownames(norm_mat), t2g_aug2020$ens_gene_ver)]
+  norm_mat_list_sub[[i]] <- norm_mat
+}
+
+names(norm_mat_list_sub) <- names(fcounts_Fmat_list)
+```
+
+```{r}
+# only select samples of interest
+# which are PAR_DMSO, PAR_LY, LYR_DMSO, LYR_ARC, LYFR_DMSO, LYFR_ARC
+
+norm_mat_list_sub <- norm_mat_list_sub %>% lapply(function(x) {
+  index <- colnames(x) %>% grep("_PAR_DMSO_|_PAR_LY_|_LYR_DMSO_|_LYR_ARC_|_LYFR_DMSO_|_LYFR_ARC_", .)
+  x[, index]
+})
+```
+
+
+```{r}
+# nonlogged normmat_ggplot_nonlog
+
+normmat_ggplot_nonlog <- vector(mode = "list", length = 2)
+for (i in 1:2) {
+  normmat_ggplot_nonlog[[i]] <- norm_mat_list_sub[[i]] %>% as.data.frame()
+  normmat_ggplot_nonlog[[i]]$genesym <- rownames(normmat_ggplot_nonlog[[i]])
+  normmat_ggplot_nonlog[[i]] <- gather(normmat_ggplot_nonlog[[i]], key = name, value = values, -genesym)
+  normmat_ggplot_nonlog[[i]]$samples <- normmat_ggplot_nonlog[[i]]$name
+  # separate out name into 4 separate columns
+  normmat_ggplot_nonlog[[i]] <- separate(normmat_ggplot_nonlog[[i]], samples, into = c("cell", "resistance", "treatment", "replicate"), sep = "_")
+  # these 2 columns are united to make the groups
+  normmat_ggplot_nonlog[[i]] <- normmat_ggplot_nonlog[[i]] %>% unite("resist_treat", c("resistance", "treatment"), remove = FALSE)
+  # making it into a factor and correcting the levels
+  normmat_ggplot_nonlog[[i]]$resist_treat <- factor(normmat_ggplot_nonlog[[i]]$resist_treat)
+  normmat_ggplot_nonlog[[i]]$treatment <- factor(normmat_ggplot_nonlog[[i]]$treatment, levels = c("DMSO", "LY", "ARC", "LY.ARC"))
+  normmat_ggplot_nonlog[[i]]$resistance <- factor(normmat_ggplot_nonlog[[i]]$resistance, levels = c("PAR", "LYR", "LYFR"))
+  normmat_ggplot_nonlog[[i]]$replicate <- factor(normmat_ggplot_nonlog[[i]]$replicate, levels = c("1", "2", "3"), labels = c("rep1", "rep2", "rep3"))
+}
+
+names(normmat_ggplot_nonlog) <- c("MCF7M", "T47D")
+```
+
+```{r}
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+boxplot_col <- c(
+  "PAR_DMSO" = "#00A8E3",
+  "PAR_LY" = "#872464",
+  "LYR_DMSO" = "#0070B9",
+  "LYR_ARC" = "#FFC541",
+  "LYFR_DMSO" = "#0070B9",
+  "LYFR_ARC" = "#FFC541"
+)
+```
+
+
+
+```{r}
+cellline <- "MCF7M"
+genes <- "BCL2L1"
+
+ggplot_gene_relative <- function(genes, cellline, jittersize = 2) {
+  plot_df <- dplyr::filter(
+    normmat_ggplot_nonlog[[cellline]],
+    genesym %in% genes & resist_treat %in% c("PAR_DMSO", "PAR_LY", "LYR_DMSO", "LYR_ARC", "LYFR_DMSO", "LYFR_ARC")
+  ) %>% arrange(genesym)
+
+
+
+  plot_df <- plot_df %>%
+    group_by(genesym, resistance) %>%
+    summarise(
+      names = name,
+      resistance = resistance,
+      treatment = treatment,
+      replicate = replicate,
+      resist_treat = resist_treat,
+      value = values,
+      relative_value = value / abs(mean(value[treatment == "DMSO"]))
+    )
+
+  max_value <- max(plot_df$relative_value) + 0.2
+
+  pvalue_manual_1 <- DGE_list[[cellline]]$PAR_LYvsDMSO %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "PAR_DMSO", group2 = "PAR_LY") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value)
+
+  pvalue_manual_2 <- DGE_list[[cellline]]$LYR_ARCvsDMSO %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "LYR_ARC", group2 = "LYR_DMSO") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value)
+
+  pvalue_manual_3 <- DGE_list[[cellline]]$LYFR_ARCvsDMSO %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "LYFR_ARC", group2 = "LYFR_DMSO") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value)
+
+
+  pvalue_manual <- rbind(pvalue_manual_1, pvalue_manual_2) %>%
+    rbind(pvalue_manual_3)
+
+  plot_df$resist_treat <- plot_df$resist_treat %>% factor(levels = c("PAR_DMSO", "PAR_LY", "LYR_DMSO", "LYR_ARC", "LYFR_DMSO", "LYFR_ARC"))
+
+  a1 <- plot_df %>%
+    ggplot(aes(x = resist_treat, y = relative_value)) +
+    # geom_boxplot(lwd=1, show.legend=FALSE) +
+    # geom_bar(stat="identity",
+    # position=position_dodge()) +
+    # geom_errorbar(aes(ymin=len-sd, ymax=len+sd), width=.2,
+    # position=position_dodge(.9))  +
+    # geom_errorbar() +
+    geom_bar(aes(fill = resist_treat),
+      stat = "summary", fun = "mean",
+      position = position_dodge(), width = 1, show.legend = FALSE
+    ) +
+    geom_jitter(aes(col = resist_treat), size = jittersize, color = "black", stroke = 3) +
+    # stat_summary(fun=mean, geom="point", color="red") +
+    scale_fill_manual(values = boxplot_col) +
+    stat_pvalue_manual(pvalue_manual, label = "padj", bracket.size = 1.5) +
+    # stat_compare_means(comparisons = my_comparisons, label = "p.format", method = "t.test", bracket.size = 1.5) +
+    stat_summary(
+      fun.data = mean_sdl, fun.args = list(mult = 1),
+      geom = "errorbar", color = "black", width = 0.5, linewidth = 0.5
+    ) +
+    ylab("relative mRNA expression") +
+    ggtitle(cellline) +
+    facet_grid(. ~ genesym) +
+    theme_prism() +
+    theme(
+      axis.text.y = element_text(color = "black", size = 20),
+      axis.text.x = element_text(color = "black", size = 20, angle = 45, hjust = 1, vjust = 1),
+      axis.title.y = element_text(color = "black", size = 25),
+      axis.title.x = element_blank(),
+      strip.text.x = element_text(size = 20)
+    )
+
+  print(a1)
+}
+```
+
+```{r}
+ggplot_gene_relative("BCL2L1", "MCF7M")
+ggplot_gene_relative("BCL2L1", "T47D")
+```
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+# ggsave(file="OV5398PDX_E2Fbarcode_test.svg", plot=a1, width=10, height=8)
+
+
+genes_i <- c("BCL2L1")
+celllines_i <- c("MCF7M", "T47D")
+
+for (i in genes_i) {
+  for (j in celllines_i) {
+    pdf(paste0("overcomeresist_LYCDK2i_", j, "_", i, ".pdf"),
+      width = 8, # 5 x 300 pixels
+      height = 6
+    ) # 300 pixels per inch)        # smaller font size
+
+    ggplot_gene_relative(i, j)
+
+    dev.off()
+  }
+}
+```
+
+
+# barplot without parental samples
+```{r}
+ggplot_gene_relative_noPAR <- function(genes, cellline, jittersize = 2) {
+  plot_df <- dplyr::filter(
+    normmat_ggplot_nonlog[[cellline]],
+    genesym == genes & resist_treat %in% c("LYR_DMSO", "LYR_ARC", "LYFR_DMSO", "LYFR_ARC")
+  ) %>% arrange(genesym)
+
+
+
+  plot_df <- plot_df %>%
+    group_by(genesym, resistance) %>%
+    summarise(
+      names = name,
+      resistance = resistance,
+      treatment = treatment,
+      replicate = replicate,
+      resist_treat = resist_treat,
+      value = values,
+      relative_value = value / abs(mean(value[treatment == "DMSO"]))
+    )
+
+  max_value <- max(plot_df$relative_value) + 0.2
+
+
+  pvalue_manual_1 <- DGE_list[[cellline]]$LYR_ARCvsDMSO %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "LYR_ARC", group2 = "LYR_DMSO") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value)
+
+  pvalue_manual_2 <- DGE_list[[cellline]]$LYFR_ARCvsDMSO %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "LYFR_ARC", group2 = "LYFR_DMSO") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value)
+
+
+  pvalue_manual <- rbind(pvalue_manual_1, pvalue_manual_2)
+
+  plot_df$resist_treat <- plot_df$resist_treat %>% factor(levels = c("LYR_DMSO", "LYR_ARC", "LYFR_DMSO", "LYFR_ARC"))
+
+  a1 <- plot_df %>%
+    ggplot(aes(x = resist_treat, y = relative_value)) +
+    # geom_boxplot(lwd=1, show.legend=FALSE) +
+    # geom_bar(stat="identity",
+    # position=position_dodge()) +
+    # geom_errorbar(aes(ymin=len-sd, ymax=len+sd), width=.2,
+    # position=position_dodge(.9))  +
+    # geom_errorbar() +
+    geom_bar(aes(fill = resist_treat),
+      stat = "summary", fun = "mean",
+      position = position_dodge(), width = 1, show.legend = FALSE
+    ) +
+    geom_jitter(aes(col = resist_treat), size = jittersize, color = "black", stroke = 3) +
+    # stat_summary(fun=mean, geom="point", color="red") +
+    scale_fill_manual(values = boxplot_col) +
+    stat_pvalue_manual(pvalue_manual, label = "padj", bracket.size = 1.5) +
+    # stat_compare_means(comparisons = my_comparisons, label = "p.format", method = "t.test", bracket.size = 1.5) +
+    stat_summary(
+      fun.data = mean_sdl, fun.args = list(mult = 1),
+      geom = "errorbar", color = "black", width = 0.5, linewidth = 0.5
+    ) +
+    ylab("relative mRNA expression") +
+    ggtitle(cellline) +
+    facet_grid(. ~ genesym) +
+    theme_prism() +
+    theme(
+      axis.text.y = element_text(color = "black", size = 20),
+      axis.text.x = element_text(color = "black", size = 20, angle = 45, hjust = 1, vjust = 1),
+      axis.title.y = element_text(color = "black", size = 25),
+      axis.title.x = element_blank(),
+      strip.text.x = element_text(size = 20)
+    )
+
+  print(a1)
+}
+```
+
+```{r}
+ggplot_gene_relative_noPAR("CDKN1A", "MCF7M")
+ggplot_gene_relative_noPAR("CDKN1A", "T47D")
+```
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+# ggsave(file="OV5398PDX_E2Fbarcode_test.svg", plot=a1, width=10, height=8)
+
+
+genes_i <- c("CDKN1A")
+celllines_i <- c("MCF7M", "T47D")
+
+for (i in genes_i) {
+  for (j in celllines_i) {
+    pdf(paste0("overcomeresist_LYCDK2i_", j, "_", i, ".pdf"),
+      width = 8, # 5 x 300 pixels
+      height = 6
+    ) # 300 pixels per inch)        # smaller font size
+
+    ggplot_gene_relative_noPAR(i, j)
+
+    dev.off()
+  }
+}
+```
+
+```{r}
+ggplot_gene_relative(c("JUN", "JUNB", "FOSL2"), "MCF7M")
+ggplot_gene_relative(c("JUN", "JUNB", "FOSL2"), "T47D")
+```
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+# ggsave(file="OV5398PDX_E2Fbarcode_test.svg", plot=a1, width=10, height=8)
+
+
+pdf(paste0("overcomeresist_LYCDK2i_JUN_JUNB_FOSL2_MCF7M.pdf"),
+  width = 12, # 5 x 300 pixels
+  height = 10
+) # 300 pixels per inch)        # smaller font size
+ggplot_gene_relative(c("JUN", "JUNB", "FOSL2"), "MCF7M")
+dev.off()
+
+
+pdf(paste0("overcomeresist_LYCDK2i_JUN_JUNB_FOSL2_T47D.pdf"),
+  width = 12, # 5 x 300 pixels
+  height = 10
+) # 300 pixels per inch)        # smaller font size
+ggplot_gene_relative(c("JUN", "JUNB", "FOSL2"), "T47D")
+dev.off()
+```
+
+
+
+
+# KRT and differentiation genes
+
+```{r}
+genes_i <- c("PARD6B", "PRICKLE2", "KRT7", "KRT8", "KRT18", "KRT19", "CDH1", "F11R", "CEACAM1", "BCL2L1", "JUN", "JUNB", "FOSL2", "CDKN1A")
+
+# can't make figure for CEACAM1 because its zero counts in the PAR_DMSO
+norm_mat_list$MCF7M["CEACAM1", ]
+normmat_ggplot_nonlog[["MCF7M"]] %>% filter(genesym == "CEACAM1")
+
+ggplot_gene_relative_noPAR(c("CEACAM1"), "MCF7M")
+ggplot_gene_relative(c("PRICKLE2", "PARD6B"), "MCF7M")
+ggplot_gene_relative(c("KRT7", "KRT8", "KRT18"), "MCF7M")
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("overcomeresist_MCF7M_KRTgenes_barplot.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+
+ggplot_gene_relative(c("KRT7", "KRT8", "KRT18"), "MCF7M", jittersize = 0.5)
+dev.off()
+
+
+
+pdf("overcomeresist_MCF7M_PRICKLE2_PARD6B_barplot.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+
+ggplot_gene_relative(c("PRICKLE2", "PARD6B"), "MCF7M")
+dev.off()
+
+
+pdf("overcomeresist_MCF7M_CEACAM1_barplot_noPAR.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+
+ggplot_gene_relative_noPAR(c("CEACAM1"), "MCF7M")
+dev.off()
+```
+
+
+
+# CEACAM1
+
+```{r}
+cellline <- "MCF7M"
+genes <- "CEACAM1"
+
+plot_df <- dplyr::filter(
+  normmat_ggplot_nonlog[[cellline]],
+  genesym %in% genes & resist_treat %in% c("PAR_DMSO", "PAR_LY", "LYR_DMSO", "LYR_ARC", "LYFR_DMSO", "LYFR_ARC")
+) %>% arrange(genesym)
+
+plot_df$values <- plot_df$values + 1
+
+
+plot_df <- plot_df %>%
+  group_by(genesym, resistance) %>%
+  summarise(
+    names = name,
+    resistance = resistance,
+    treatment = treatment,
+    replicate = replicate,
+    resist_treat = resist_treat,
+    value = values,
+    relative_value = value / abs(mean(value[treatment == "DMSO"]))
+  )
+
+max_value <- max(plot_df$relative_value) + 0.2
+
+pvalue_manual_1 <- DGE_list[[cellline]]$PAR_LYvsDMSO %>%
+  filter(SYMBOL %in% genes) %>%
+  dplyr::select(SYMBOL, padj) %>%
+  mutate(group1 = "PAR_DMSO", group2 = "PAR_LY") %>%
+  dplyr::rename("genesym" = "SYMBOL") %>%
+  mutate(y.position = max_value)
+
+pvalue_manual_2 <- DGE_list[[cellline]]$LYR_ARCvsDMSO %>%
+  filter(SYMBOL %in% genes) %>%
+  dplyr::select(SYMBOL, padj) %>%
+  mutate(group1 = "LYR_ARC", group2 = "LYR_DMSO") %>%
+  dplyr::rename("genesym" = "SYMBOL") %>%
+  mutate(y.position = max_value)
+
+pvalue_manual_3 <- DGE_list[[cellline]]$LYFR_ARCvsDMSO %>%
+  filter(SYMBOL %in% genes) %>%
+  dplyr::select(SYMBOL, padj) %>%
+  mutate(group1 = "LYFR_ARC", group2 = "LYFR_DMSO") %>%
+  dplyr::rename("genesym" = "SYMBOL") %>%
+  mutate(y.position = max_value)
+
+
+pvalue_manual <- rbind(pvalue_manual_1, pvalue_manual_2) %>%
+  rbind(pvalue_manual_3)
+
+plot_df$resist_treat <- plot_df$resist_treat %>% factor(levels = c("PAR_DMSO", "PAR_LY", "LYR_DMSO", "LYR_ARC", "LYFR_DMSO", "LYFR_ARC"))
+
+a1 <- plot_df %>%
+  ggplot(aes(x = resist_treat, y = relative_value)) +
+  geom_bar(aes(fill = resist_treat),
+    stat = "summary", fun = "mean",
+    position = position_dodge(), width = 1, show.legend = FALSE
+  ) +
+  geom_jitter(aes(col = resist_treat), size = 2, color = "black", stroke = 3) +
+  # stat_summary(fun=mean, geom="point", color="red") +
+  scale_fill_manual(values = boxplot_col) +
+  stat_pvalue_manual(pvalue_manual, label = "padj", bracket.size = 1.5) +
+  # stat_compare_means(comparisons = my_comparisons, label = "p.format", method = "t.test", bracket.size = 1.5) +
+  stat_summary(
+    fun.data = mean_sdl, fun.args = list(mult = 1),
+    geom = "errorbar", color = "black", width = 0.5, linewidth = 0.5
+  ) +
+  ylab("relative mRNA expression") +
+  ggtitle(cellline) +
+  facet_grid(. ~ genesym) +
+  theme_prism() +
+  theme(
+    axis.text.y = element_text(color = "black", size = 20),
+    axis.text.x = element_text(color = "black", size = 20, angle = 45, hjust = 1, vjust = 1),
+    axis.title.y = element_text(color = "black", size = 25),
+    axis.title.x = element_blank(),
+    strip.text.x = element_text(size = 20)
+  )
+
+print(a1)
+```
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("overcomeresist_MCF7M_CEACAM1_barplot_plus1offset.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+
+a1
+dev.off()
+```
+
+
+
+
+
+
+
+

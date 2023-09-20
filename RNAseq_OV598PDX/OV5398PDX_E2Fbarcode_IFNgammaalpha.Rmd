@@ -1,0 +1,571 @@
+---
+title: "OV5398PDX barplots"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+# load library and data
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r echo=FALSE, results=FALSE, message=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(msigdbr)
+library(ggdendro)
+library(GSVA)
+library("ggblend")
+library(rcartocolor)
+```
+
+```{r echo=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/1.QC/data/RData/prep.RData")
+```
+
+```{r echo=FALSE}
+gsea_output <- readRDS("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/4.GSEA/data/rds/gesea_output.rds")
+```
+
+```{r}
+# barcode plot setup
+
+gsInfo <- function(object, geneSetID) {
+  geneList <- object@geneList
+
+  if (is.numeric(geneSetID)) {
+    geneSetID <- object@result[geneSetID, "ID"]
+  }
+
+  geneSet <- object@geneSets[[geneSetID]]
+  exponent <- object@params[["exponent"]]
+  df <- gseaScores(geneList, geneSet, exponent, fortify = TRUE)
+  df$ymin <- 0
+  df$ymax <- 0
+  pos <- df$position == 1
+  h <- diff(range(df$runningScore)) / 20
+  df$ymin[pos] <- -h
+  df$ymax[pos] <- h
+  df$geneList <- geneList
+  if (length(object@gene2Symbol) == 0) {
+    df$gene <- names(geneList)
+  } else {
+    df$gene <- object@gene2Symbol[names(geneList)]
+  }
+
+  df$Description <- object@result[geneSetID, "Description"]
+  return(df)
+}
+
+# https://rdrr.io/bioc/DOSE/src/R/gsea.R
+gseaScores <- function(geneList, geneSet, exponent = 1, fortify = FALSE) {
+  ###################################################################
+  ##    geneList                                                   ##
+  ##                                                               ##
+  ## 1. Rank order the N genes in D to form L = { g_1, ... , g_N}  ##
+  ##    according to the correlation, r(g_j)=r_j,                  ##
+  ##    of their expression profiles with C.                       ##
+  ##                                                               ##
+  ###################################################################
+
+  ###################################################################
+  ##    exponent                                                   ##
+  ##                                                               ##
+  ## An exponent p to control the weight of the step.              ##
+  ##   When p = 0, Enrichment Score ( ES(S) ) reduces to           ##
+  ##   the standard Kolmogorov-Smirnov statistic.                  ##
+  ##   When p = 1, we are weighting the genes in S                 ##
+  ##   by their correlation with C normalized                      ##
+  ##   by the sum of the correlations over all of the genes in S.  ##
+  ##                                                               ##
+  ###################################################################
+
+  ## genes defined in geneSet should appear in geneList.
+  ## this is a must, see https://github.com/GuangchuangYu/DOSE/issues/23
+  geneSet <- intersect(geneSet, names(geneList))
+
+  N <- length(geneList)
+  Nh <- length(geneSet)
+
+  Phit <- Pmiss <- numeric(N)
+  hits <- names(geneList) %in% geneSet ## logical
+
+  Phit[hits] <- abs(geneList[hits])^exponent
+  NR <- sum(Phit)
+  Phit <- cumsum(Phit / NR)
+
+  Pmiss[!hits] <- 1 / (N - Nh)
+  Pmiss <- cumsum(Pmiss)
+
+  runningES <- Phit - Pmiss
+
+  ## ES is the maximum deviation from zero of Phit-Pmiss
+  max.ES <- max(runningES)
+  min.ES <- min(runningES)
+  if (abs(max.ES) > abs(min.ES)) {
+    ES <- max.ES
+  } else {
+    ES <- min.ES
+  }
+
+  df <- data.frame(
+    x = seq_along(runningES),
+    runningScore = runningES,
+    position = as.integer(hits)
+  )
+
+  if (fortify == TRUE) {
+    return(df)
+  }
+
+  df$gene <- names(geneList)
+  res <- list(ES = ES, runningES = df)
+  return(res)
+}
+```
+
+
+# E2F_TARGET barcode, combine comparisons
+
+```{r}
+barcode_1 <- gsInfo(gsea_output$CDK2i200mpkQD_vs_control, geneSetID = c("HALLMARK_E2F_TARGETS"))
+barcode_2 <- gsInfo(gsea_output$CDK2i100mpkBID_vs_control, geneSetID = c("HALLMARK_E2F_TARGETS"))
+
+barcode_1 %>% ggplot(aes(x = x, y = runningScore)) +
+  geom_line(alpha = 0.95, size = 0.7, col = "orange") +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.2) +
+  ggtitle("HALLMARK_E2F_TARGETS") +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Enrichment score (ES)") +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  theme(
+    plot.title.position = "plot",
+    axis.text = element_text(size = 9),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black")
+  )
+
+
+barcode_2 %>% ggplot(aes(x = x, y = runningScore)) +
+  geom_line(alpha = 0.95, size = 0.7, col = "orange") +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.2) +
+  ggtitle("HALLMARK_E2F_TARGETS") +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Running Enrichment score") +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  theme(
+    plot.title.position = "plot",
+    axis.text = element_text(size = 9),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black")
+  )
+```
+
+```{r}
+barcode_1$group <- c("CDK2i200mpkQD_vs_control")
+barcode_2$group <- c("CDK2i100mpkBID_vs_control")
+# barcode_3$group <- c("LYFR_DMSO_vs_PAR_LY")
+
+barcode_comb <- rbind(barcode_1, barcode_2)
+#  %>% rbind(barcode_3)
+```
+
+```{r fig.width=12, fig.height=8}
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+# incyclix_col %>% show_col
+
+title_numbers <- gsea_output %>%
+  lapply(function(x) {
+    x %>%
+      as_tibble() %>%
+      filter(ID == "HALLMARK_E2F_TARGETS") %>%
+      dplyr::select(NES, p.adjust)
+  }) %>%
+  unlist() %>%
+  as.numeric()
+
+title_numbers <- title_numbers %>%
+  signif(digits = 3) %>%
+  as.character()
+
+ggplot_title <- c("OV5398PDX HALLMARK_E2F_TARGETS", title_numbers) %>% paste(collapse = " ")
+
+barcode_comb$group <- barcode_comb$group %>% factor(level = c("CDK2i200mpkQD_vs_control", "CDK2i100mpkBID_vs_control"))
+
+a1 <- barcode_comb %>%
+  ggplot(aes(x = x, y = runningScore, col = group)) +
+  geom_line(alpha = 1, size = 1.5) |>
+  partition(vars(group)) |>
+  blend("multiply") +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.4) +
+  ggtitle(ggplot_title) +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Running Enrichment score") +
+  scale_color_manual(values = incyclix_col) +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  # theme(panel.background = element_rect(fill = "white")) +
+  theme(
+    axis.text = element_text(size = 15),
+    axis.title = element_text(size = 20),
+    plot.title = element_text(hjust = 0.5),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black"),
+    legend.title = element_blank()
+  )
+
+a1
+#        panel.grid.major = element_blank(),
+#        panel.grid.minor = element_blank()
+```
+
+
+```{r eval=FALSE}
+# this was used
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+grDevices::cairo_pdf("OV5398PDX_E2Fbarcode.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 4
+)
+
+a1
+
+dev.off()
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+# ggsave(file="OV5398PDX_E2Fbarcode_test.svg", plot=a1, width=10, height=8)
+
+pdf("OV5398PDX_E2Fbarcode.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 4
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+dev.off()
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("OV5398PDX_E2Fbarcode.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 4
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+dev.off()
+```
+
+```{r eval=FALSE}
+library(Cairo)
+
+Cairo::Cairo("test.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 4, version = 1.1, type = "pdf"
+)
+
+a1
+
+grDevices::cairo_pdf("test.pdf",
+  onefile = TRUE,
+  width = 10, # 5 x 300 pixels
+  height = 7, antialias = c("none"), pointsize = 10
+)
+
+a1
+
+dev.off()
+```
+
+
+# IFN alpha barcode combine plots
+
+```{r}
+barcode_1 <- gsInfo(gsea_output$CDK2i200mpkQD_vs_control, geneSetID = c("HALLMARK_INTERFERON_ALPHA_RESPONSE"))
+barcode_2 <- gsInfo(gsea_output$CDK2i100mpkBID_vs_control, geneSetID = c("HALLMARK_INTERFERON_ALPHA_RESPONSE"))
+
+barcode_1$group <- c("CDK2i200mpkQD_vs_control")
+barcode_2$group <- c("CDK2i100mpkBID_vs_control")
+# barcode_3$group <- c("LYFR_DMSO_vs_PAR_LY")
+
+barcode_comb <- rbind(barcode_1, barcode_2)
+#  %>% rbind(barcode_3)
+```
+
+```{r fig.width=12, fig.height=8}
+# library(rcartocolor)
+# safe_col = carto_pal(12, "Safe")
+
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+# incyclix_col %>% show_col
+
+title_numbers <- gsea_output %>%
+  lapply(function(x) {
+    x %>%
+      as_tibble() %>%
+      filter(ID == "HALLMARK_INTERFERON_ALPHA_RESPONSE") %>%
+      dplyr::select(NES, p.adjust)
+  }) %>%
+  unlist() %>%
+  as.numeric()
+
+title_numbers <- title_numbers %>%
+  signif(digits = 3) %>%
+  as.character()
+
+ggplot_title <- c("OV5398PDX HALLMARK_INTERFERON_ALPHA_RESPONSE", title_numbers) %>% paste(collapse = " ")
+
+barcode_comb$group <- barcode_comb$group %>% factor(level = c("CDK2i200mpkQD_vs_control", "CDK2i100mpkBID_vs_control"))
+
+a1 <- barcode_comb %>%
+  ggplot(aes(x = x, y = runningScore, col = group)) +
+  geom_line(alpha = 1, size = 1.5) |>
+  partition(vars(group)) |>
+  blend("multiply") +
+  # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+  # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+  # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+  geom_hline(yintercept = 0, size = 0.4) +
+  ggtitle(ggplot_title) +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Running Enrichment score") +
+  scale_color_manual(values = incyclix_col) +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  # theme(panel.background = element_rect(fill = "white")) +
+  theme(
+    axis.text = element_text(size = 15),
+    axis.title = element_text(size = 20),
+    plot.title = element_text(hjust = 0.5),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black"),
+    legend.title = element_blank()
+  )
+
+a1
+#        panel.grid.major = element_blank(),
+#        panel.grid.minor = element_blank()
+```
+
+
+```{r eval=FALSE}
+# this was used
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+grDevices::cairo_pdf("OV5398PDX_IFNalpha_combined.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 4
+)
+
+a1
+
+dev.off()
+```
+
+
+
+# IFN gamma barcode combine plots
+
+```{r}
+barcode_1 <- gsInfo(gsea_output$CDK2i200mpkQD_vs_control, geneSetID = c("HALLMARK_INTERFERON_GAMMA_RESPONSE"))
+barcode_2 <- gsInfo(gsea_output$CDK2i100mpkBID_vs_control, geneSetID = c("HALLMARK_INTERFERON_GAMMA_RESPONSE"))
+
+barcode_1$group <- c("CDK2i200mpkQD_vs_control")
+barcode_2$group <- c("CDK2i100mpkBID_vs_control")
+# barcode_3$group <- c("LYFR_DMSO_vs_PAR_LY")
+
+barcode_comb <- rbind(barcode_1, barcode_2)
+#  %>% rbind(barcode_3)
+```
+
+```{r fig.width=12, fig.height=8}
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+title_numbers <- gsea_output %>%
+  lapply(function(x) {
+    x %>%
+      as_tibble() %>%
+      filter(ID == "HALLMARK_INTERFERON_GAMMA_RESPONSE") %>%
+      dplyr::select(NES, p.adjust)
+  }) %>%
+  unlist() %>%
+  as.numeric()
+
+title_numbers <- title_numbers %>%
+  signif(digits = 3) %>%
+  as.character()
+
+ggplot_title <- c("OV5398PDX HALLMARK_INTERFERON_GAMMA_RESPONSE", title_numbers) %>% paste(collapse = " ")
+
+barcode_comb$group <- barcode_comb$group %>% factor(level = c("CDK2i200mpkQD_vs_control", "CDK2i100mpkBID_vs_control"))
+
+a1 <- barcode_comb %>%
+  ggplot(aes(x = x, y = runningScore, col = group)) +
+  geom_line(alpha = 1, size = 1.5) |>
+  partition(vars(group)) |>
+  blend("multiply") +
+  geom_hline(yintercept = 0, size = 0.4) +
+  ggtitle(ggplot_title) +
+  xlab("Rank in Ordered Dataset") +
+  ylab("Running Enrichment score") +
+  scale_color_manual(values = incyclix_col) +
+  # ylim(-0.2,0.2) +
+  theme_bw() +
+  # theme(panel.background = element_rect(fill = "white")) +
+  theme(
+    axis.text = element_text(size = 15),
+    axis.title = element_text(size = 20),
+    plot.title = element_text(hjust = 0.5),
+    # panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black"),
+    legend.title = element_blank()
+  )
+
+a1
+```
+
+
+```{r eval=FALSE}
+# this was used
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+grDevices::cairo_pdf("OV5398PDX_IFNgamma_combined.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 4
+)
+
+a1
+
+dev.off()
+```
+
+
+# IFN alpha gamma barcode single plots
+
+generate separately for alpha and gamma but combine the treatment samples. combine 200 and 100 mpk?
+
+
+```{r}
+barcode_1 <- gsInfo(gsea_output$CDK2i200mpkQD_vs_control, geneSetID = c("HALLMARK_INTERFERON_ALPHA_RESPONSE"))
+barcode_2 <- gsInfo(gsea_output$CDK2i100mpkBID_vs_control, geneSetID = c("HALLMARK_INTERFERON_GAMMA_RESPONSE"))
+```
+
+```{r}
+make_single_barcode <- function(gsea_output, geneset, addtotitle) {
+  title_numbers <- gsea_output %>%
+    as_tibble() %>%
+    filter(ID == geneset) %>%
+    dplyr::select(NES, p.adjust) %>%
+    unlist()
+
+  title_numbers <- title_numbers %>%
+    signif(digits = 3) %>%
+    as.character()
+  ggplot_title <- c("OV5398PDX", geneset, title_numbers) %>% paste(collapse = " ")
+
+  barcode_1 <- gsInfo(gsea_output, geneSetID = geneset)
+
+  # barcode_1$group <- barcode_1$group %>% factor(level = c("CDK2i200mpkQD_vs_control", "CDK2i100mpkBID_vs_control"))
+
+  a1 <- barcode_1 %>% ggplot(aes(x = x, y = runningScore, col = incyclix_col[1])) +
+    geom_line(alpha = 1, size = 3) +
+    geom_hline(yintercept = 0, size = 0.4) +
+    ggtitle(paste(addtotitle, ggplot_title)) +
+    xlab("Rank in Ordered Dataset") +
+    ylab("Running Enrichment score") +
+    scale_color_manual(values = incyclix_col[1]) +
+    # ylim(-0.2,0.2) +
+    theme_bw() +
+    # theme(panel.background = element_rect(fill = "white")) +
+    theme(
+      axis.text = element_text(size = 15),
+      axis.title = element_text(size = 20),
+      plot.title = element_text(hjust = 0.5),
+      # panel.grid.minor = element_blank(),
+      axis.line = element_line(colour = "black"),
+      legend.position = "none",
+      legend.title = element_blank()
+    )
+
+  print(a1)
+}
+```
+
+```{r}
+make_single_barcode(gsea_output$CDK2i200mpkQD_vs_control, "HALLMARK_INTERFERON_ALPHA_RESPONSE", "CDK2i200mpkQD_vs_control")
+make_single_barcode(gsea_output$CDK2i200mpkQD_vs_control, "HALLMARK_INTERFERON_GAMMA_RESPONSE", "CDK2i200mpkQD_vs_control")
+```
+
+```{r}
+make_single_barcode(gsea_output$CDK2i100mpkBID_vs_control, "HALLMARK_INTERFERON_ALPHA_RESPONSE", "CDK2i100mpkBID_vs_control")
+make_single_barcode(gsea_output$CDK2i100mpkBID_vs_control, "HALLMARK_INTERFERON_GAMMA_RESPONSE", "CDK2i100mpkBID_vs_control")
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+# ggsave(file="OV5398PDX_E2Fbarcode_test.svg", plot=a1, width=10, height=8)
+
+
+genesets_i <- c("HALLMARK_INTERFERON_ALPHA_RESPONSE", "HALLMARK_INTERFERON_GAMMA_RESPONSE")
+comparisons_i <- c("CDK2i200mpkQD_vs_control", "CDK2i100mpkBID_vs_control")
+
+for (i in genesets_i) {
+  for (j in comparisons_i) {
+    pdf(paste0("OV5398PDX_", i, "_", j, ".pdf"),
+      width = 8, # 5 x 300 pixels
+      height = 4
+    ) # 300 pixels per inch)        # smaller font size
+
+    make_single_barcode(gsea_output[[j]], i, j)
+
+    dev.off()
+  }
+}
+```
+

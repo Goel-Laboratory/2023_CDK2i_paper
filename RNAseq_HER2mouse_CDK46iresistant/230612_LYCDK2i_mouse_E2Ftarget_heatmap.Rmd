@@ -1,0 +1,133 @@
+---
+title: "HER2 mouse E2F target genes heatmap"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+# load library and data
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r results=FALSE, message=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(msigdbr)
+library(ggdendro)
+library(rcartocolor)
+library(ComplexHeatmap)
+library(rcartocolor)
+```
+
+```{r echo=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230614_ABEMA_ARC_COMBO_VEH_primary_mouse_tumour/R_analysis/1.QC_prep/data/RData/prep.RData")
+```
+
+
+
+```{r echo=FALSE}
+# subset samples
+sample_information$time_numeric <- sample_information$time %>%
+  gsub("days", "", .) %>%
+  as.numeric()
+
+sample_information <- sample_information %>%
+  filter(time_numeric < 25) %>%
+  data.frame()
+norm_mat_symbol <- norm_mat_symbol[, sample_information$new_name]
+```
+
+
+# CHM function
+
+```{r}
+make_heatmap_symbol_CHM <- function(genes_input,
+                                    turnon_rownames = FALSE, rownames_size = 7,
+                                    turnon_clusterrows = TRUE, show_barplot = FALSE,
+                                    kmeansrows_number = 1) {
+  # only get the genes that interesct between genes_input and the genes in the normalised matrix
+  genes_input <- intersect(genes_input, rownames(norm_mat_symbol))
+  heatmap_mat <- norm_mat_symbol[genes_input, ]
+  # take out any rows with all zero's in the rows. This sometimes happens because when i only select out the PAR group, all zeros but its in the matrix because in the LYFR it is expressed. These are quite interesting... SASP genes that are not expressed at PAR but only expressed in LYFR. I wonder if these are expressed at PAR treated with LY + Fulv. shouldn't be? cuz Fulv brings most things down ...
+  index <- apply(heatmap_mat, 1, function(row) all(row == 0))
+  heatmap_mat <- heatmap_mat[!index, ]
+  # generate z-score
+  scaled.mat <- t(scale(t(heatmap_mat)))
+  ##### ----------------------------------------------------------------------------------------------------
+  # column colors
+  # incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+  # column_color_treatment <- col_npg5[1:4]
+  column_color_treatment <- c("#00A8E3", "#872464", "#FFC541", "#0070B9")
+  # column_color_time <- ggsci::pal_simpsons()(8)[1:5]
+  # column_color_time <- carto_pal(5, "SunsetDark")
+  column_color_time <- carto_pal(13, "Sunset")[c(1, 4, 7, 10, 13)]
+
+  names(column_color_treatment) <- unique(sample_information$treatment)
+  names(column_color_time) <- sample_information$time %>%
+    factor() %>%
+    levels()
+
+  anno_colors <- list(
+    treatment = column_color_treatment,
+    time = column_color_time
+  )
+  # column annotations
+  column_ha <- HeatmapAnnotation(
+    mean = anno_barplot(colMeans(scaled.mat), height = unit(2, "cm")),
+    treatment = sample_information$treatment,
+    time = sample_information$time,
+    col = anno_colors
+  )
+  # column split
+  column_split <- sample_information$treatment
+  ##### ----------------------------------------------------------------------------------------------------
+  # cell colors
+  col.pan <- colorRampPalette(c("black", "dodgerblue3", "white", "orange", "red"))(100)
+  ##### ----------------------------------------------------------------------------------------------------
+  # make heatmap
+  Heatmap(scaled.mat,
+    name = "z-score",
+    col = col.pan,
+    top_annotation = column_ha,
+    cluster_columns = FALSE,
+    row_km = kmeansrows_number, show_row_names = turnon_rownames, row_names_gp = gpar(fontsize = rownames_size),
+    column_split = sample_information$treatment
+  )
+}
+
+make_heatmap_symbol_CHM(filter(h_gene_sets, gs_name == "HALLMARK_E2F_TARGETS")$gene_symbol, kmeansrows_number = 1)
+```
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230614_ABEMA_ARC_COMBO_VEH_primary_mouse_tumour/R_analysis/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("HER2mouse_overcomeresist_E2Ftarget_heatmap.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+
+make_heatmap_symbol_CHM(filter(h_gene_sets, gs_name == "HALLMARK_E2F_TARGETS")$gene_symbol, kmeansrows_number = 1)
+
+
+dev.off()
+```
+

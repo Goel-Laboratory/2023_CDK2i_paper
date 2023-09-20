@@ -1,0 +1,386 @@
+---
+title: "OCAR3 barplot"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+# load library and data
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r results=FALSE, message=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(msigdbr)
+library(GSVA)
+library(DESeq2)
+
+
+library("ggprism")
+```
+
+```{r echo=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OVCAR3_parental/1.QC/data/RData/prep.RData")
+```
+
+# ssGSEA
+
+```{r message=FALSE, results=FALSE}
+
+GSEA.list <- vector(mode = "list", length = length(senescence_markers_df$gs_name %>% unique()))
+for (i in 1:length(senescence_markers_df$gs_name %>% unique())) {
+  GSEA.list[[i]] <- senescence_markers_df %>%
+    filter(gs_name == unique(senescence_markers_df$gs_name)[i]) %>%
+    .$gene_symbol
+}
+names(GSEA.list) <- senescence_markers_df$gs_name %>% unique()
+
+GSEA.list$Jochems <- NULL
+
+Senscore_ssGSEA <- gsva(expr = norm_mat_symbol, gset.idx.list = GSEA.list, mx.diff = TRUE, verbose = TRUE, parallel.sz = 2, method = "ssgsea") %>% data.frame()
+```
+
+
+# Senscore ssGSEA boxplot 
+
+```{r}
+# up scores
+rownames(Senscore_ssGSEA)
+index_up <- c(1, 3, 5, 6)
+index_down <- c(2, 4)
+```
+
+```{r}
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA[index_up, ] %>% as_tibble(rownames = "group")
+Senscore_ssGSEA_ggplot <- gather(Senscore_ssGSEA_ggplot, key = names, value = value, -group)
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA_ggplot %>% separate(names, c("cellline", "status", "treatment", "replicate"), remove = FALSE)
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA_ggplot %>% arrange(group)
+```
+
+```{r results=FALSE}
+my_comparisons <- list(c("Control", "INX"))
+
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+boxplot_col <- c(
+  "Control" = "#0070B9",
+  "INX" = "#FFC541"
+)
+
+Senscore_ssGSEA_ggplot %>% filter(group == "Casella_UP")
+t.test(x = c(0.1638525, 0.1832479, 0.1600299), y = c(0.3376492, 0.3420807, 0.3377224))
+
+
+Senscore_ssGSEA_ggplot %>% filter(group == "Casella_UP")
+Senscore_ssGSEA_ggplot %>% filter(group == "Fridman_UP")
+
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA_ggplot %>%
+  group_by(group) %>%
+  summarise(
+    names = names,
+    cellline = cellline,
+    status = status,
+    treatment = treatment,
+    replicate = replicate,
+    value = value,
+    relative_value = value / abs(mean(value[treatment == "Control"]))
+  )
+
+Senscore_ssGSEA_ggplot %>%
+  filter(group == "Fridman_UP") %>%
+  .$relative_value
+t.test(x = c(0.9934789, 0.9911056, 1.0154155), y = c(1.3351079, 1.3110065, 1.2965549))
+
+Senscore_ssGSEA_ggplot %>%
+  filter(group == "Hernandez") %>%
+  .$relative_value
+t.test(x = c(0.9867970, 0.9968591, 1.0163439), y = c(1.3541569, 1.2917974, 1.3536868))
+
+# Senscore_ssGSEA_ggplot %>% data.frame
+
+# mean is now 1 ...
+Senscore_ssGSEA_ggplot$relative_value_new <- ifelse(Senscore_ssGSEA_ggplot$group == "Purcell",
+  Senscore_ssGSEA_ggplot$relative_value + 2,
+  Senscore_ssGSEA_ggplot$relative_value
+)
+
+a1 <- Senscore_ssGSEA_ggplot %>%
+  ggplot(aes(x = treatment, y = relative_value_new)) +
+
+  geom_bar(aes(fill = treatment),
+    stat = "summary", fun = "mean",
+    position = position_dodge(), width = 1, show.legend = FALSE
+  ) +
+  # stat_summary(fun=mean, geom="point", color="red") +
+  scale_fill_manual(values = boxplot_col) +
+  stat_compare_means(comparisons = my_comparisons, label = "p.format", method = "t.test", bracket.size = 1.5) +
+  geom_jitter(aes(col = treatment), size = 2, stroke = 2, col = "black") +
+  stat_summary(
+    fun.data = mean_sdl, fun.args = list(mult = 1),
+    geom = "errorbar", color = "black", width = 0.5, linewidth = 1
+  ) +
+  ylab("relative ssGSEA score") +
+  facet_grid(. ~ group) +
+  theme_prism() +
+  theme(
+    axis.text = element_text(color = "black", size = 15),
+    axis.title.y = element_text(color = "black", size = 20),
+    axis.title.x = element_blank(),
+    strip.text.x = element_text(size = 15)
+  )
+
+a1
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OVCAR3_parental/paper_figures/figures_output/"
+
+setwd(save_pdf_dir)
+
+pdf("OVCAR3_INXvscontrol_ssGSEAsenscore_boxplot.pdf",
+  width = 10, # 5 x 300 pixels
+  height = 7
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+dev.off()
+```
+
+
+
+
+# JUN JUNB FOSL2
+
+```{r results=FALSE, echo=FALSE}
+dds <- DESeqDataSetFromMatrix(fcounts_Fmat, colData = sample_information, design = ~treatment)
+dds <- DESeq(dds)
+
+norm_mat_symbol <- counts(dds, normalized = TRUE)
+rownames(norm_mat_symbol) <- t2g_aug2020$ext_gene[match(rownames(norm_mat_symbol), t2g_aug2020$ens_gene_ver)]
+
+
+normmat_ggplot_nonlog <- norm_mat_symbol %>% as.data.frame()
+normmat_ggplot_nonlog$genesym <- rownames(normmat_ggplot_nonlog)
+normmat_ggplot_nonlog <- gather(normmat_ggplot_nonlog, key = samples, value = values, -genesym)
+
+normmat_ggplot_nonlog <- normmat_ggplot_nonlog %>% separate(samples, into = c("cellline", "class", "treatment", "replicate"), sep = "_", remove = FALSE)
+normmat_ggplot_nonlog$treatment <- factor(normmat_ggplot_nonlog$treatment)
+normmat_ggplot_nonlog$replicate <- factor(normmat_ggplot_nonlog$replicate)
+normmat_ggplot_nonlog$treatment <- normmat_ggplot_nonlog$treatment %>% factor(levels = c("Control", "INX"))
+```
+
+```{r}
+file_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OVCAR3_parental/3.DGE/data/rds"
+
+DGE_list <- readRDS(file.path(file_dir, "DGE_list.rds"))
+```
+
+
+```{r}
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+boxplot_col <- c(
+  "Control" = "#0070B9",
+  "INX" = "#FFC541"
+)
+
+
+ggplot_gene_relative <- function(genes) {
+  plot_df <- dplyr::filter(normmat_ggplot_nonlog, genesym %in% genes) %>% arrange(genesym)
+
+  plot_df <- plot_df %>%
+    group_by(genesym) %>%
+    summarise(
+      names = samples,
+      cellline = cellline,
+      # status = status,
+      treatment = treatment,
+      replicate = replicate,
+      value = values,
+      relative_value = value / abs(mean(value[treatment == "Control"]))
+    )
+
+  max_value <- max(plot_df$relative_value) + 0.1
+
+  pvalue_manual <- DGE_list$INX_vs_Control %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "Control", group2 = "INX") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value)
+
+
+  a1 <- plot_df %>%
+    ggplot(aes(x = treatment, y = relative_value)) +
+    geom_bar(aes(fill = treatment),
+      stat = "summary", fun = "mean",
+      position = position_dodge(), width = 1, show.legend = FALSE
+    ) +
+    stat_summary(
+      fun.data = mean_sdl, fun.args = list(mult = 1),
+      geom = "errorbar", color = "black", width = 0.5, linewidth = 0.5
+    ) +
+    # stat_summary(fun=mean, geom="point", color="red") +
+    scale_fill_manual(values = boxplot_col) +
+    stat_pvalue_manual(pvalue_manual, label = "padj", bracket.size = 1.5) +
+    # stat_compare_means(comparisons = my_comparisons, label = "p.format", method = "t.test", bracket.size = 1.5) +
+    geom_jitter(size = 2, stroke = 3, col = "black") +
+    ylab("relative mRNA expression") +
+    facet_grid(. ~ genesym) +
+    theme_prism() +
+    theme(
+      axis.text = element_text(color = "black", size = 15),
+      axis.title.y = element_text(color = "black", size = 20),
+      axis.title.x = element_blank(),
+      strip.text.x = element_text(size = 15)
+    )
+
+  print(a1)
+}
+```
+
+
+```{r}
+genes_i <- c("JUN", "JUNB", "FOSL2")
+a1 <- ggplot_gene_relative(genes = genes_i)
+
+ggplot_gene_relative(genes = "BCL2L1")
+ggplot_gene_relative(genes = "CDKN1A")
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OVCAR3_parental/paper_figures/figures_output/"
+
+setwd(save_pdf_dir)
+
+pdf("OVCAR3_INXvscontrol_JUN_JUNB_FOSL2.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 4
+) # 300 pixels per inch)        # smaller font size
+
+ggplot_gene_relative(genes = c("JUN", "JUNB", "FOSL2"))
+
+dev.off()
+
+pdf("OVCAR3_INXvscontrol_BCL2L1.pdf",
+  width = 6, # 5 x 300 pixels
+  height = 4
+) # 300 pixels per inch)        # smaller font size
+
+ggplot_gene_relative(genes = "BCL2L1")
+
+dev.off()
+```
+
+
+
+# Other plots boxplot
+
+```{r}
+ggplot_gene_paper <- function(gene) {
+  max_y <- dplyr::filter(norm_mat.ggplot, genesym == gene) %>%
+    .$values %>%
+    max()
+  max_y <- max_y + 0.1
+
+  pvalue_manual <- DGE_list$INX_vs_Control %>%
+    filter(SYMBOL == gene) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "Control", group2 = "INX") %>%
+    mutate(y.position = max_y)
+
+
+  a1 <- dplyr::filter(norm_mat.ggplot, genesym == gene) %>%
+    ggplot(aes(y = values, x = treatment, col = treatment)) +
+    #  geom_boxplot(outlier.shape = NA) +
+    # facet_grid( . ~ time, scales = "free") +
+    geom_boxplot(lwd = 1.5, show.legend = FALSE) +
+    geom_jitter(size = 10, shape = 21, stroke = 2) +
+    #  geom_line(aes(group=lines), col="red") +
+    # geom_jitter(alpha = 1, size = 2, position = position_jitter(seed = 1)) +
+    scale_color_manual(values = boxplot_col) +
+    ggtitle(paste(c(gene))) +
+    # geom_text(aes(label = name), size = 1.5, vjust = 1) +
+    # @geom_text_repel(aes(label = replicate), size = 3, vjust = 1) +
+    scale_y_continuous("gene expression (log2)") +
+    stat_pvalue_manual(pvalue_manual, label = "padj", bracket.size = 1.5) +
+    theme_prism() +
+    theme(
+      axis.text = element_text(color = "black", size = 15),
+      axis.title.y = element_text(color = "black", size = 20),
+      axis.title.x = element_blank(),
+      plot.title = element_text(hjust = 0.5, size = 20)
+    )
+
+  print(a1)
+}
+```
+
+```{r}
+ggplot_gene_paper("JUN")
+ggplot_gene_paper("JUNB")
+ggplot_gene_paper("FOSL2")
+ggplot_gene_paper("BCL2L1")
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OVCAR3_parental/paper_figures/figures_output/"
+
+setwd(save_pdf_dir)
+
+pdf("OVCAR3_INXvscontrol_JUN.pdf",
+  width = 6, # 5 x 300 pixels
+  height = 4
+) # 300 pixels per inch)        # smaller font size
+
+ggplot_gene_paper("JUN")
+
+dev.off()
+
+pdf("OVCAR3_INXvscontrol_JUNB.pdf",
+  width = 6, # 5 x 300 pixels
+  height = 4
+) # 300 pixels per inch)        # smaller font size
+
+ggplot_gene_paper("JUNB")
+
+dev.off()
+
+pdf("OVCAR3_INXvscontrol_FOSL2.pdf",
+  width = 6, # 5 x 300 pixels
+  height = 4
+) # 300 pixels per inch)        # smaller font size
+
+ggplot_gene_paper("FOSL2")
+
+dev.off()
+
+pdf("OVCAR3_INXvscontrol_BCL2L1.pdf",
+  width = 6, # 5 x 300 pixels
+  height = 4
+) # 300 pixels per inch)        # smaller font size
+
+ggplot_gene_paper("BCL2L1")
+
+dev.off()
+```
+

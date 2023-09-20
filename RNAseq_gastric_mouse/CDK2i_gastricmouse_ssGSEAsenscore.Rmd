@@ -1,0 +1,196 @@
+---
+title: "gastric mouse ssGSEA"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+
+# load library
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r include = FALSE, message=FALSE}
+# load library
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(GSVA)
+library(ComplexHeatmap)
+library(UpSetR)
+library(enrichplot)
+library(clusterProfiler)
+library(ggprism)
+```
+
+```{r echo=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230602_CDK2i_gastric_mouse/R_analysis/1.QC/data/RData/prep.RData")
+```
+
+
+```{r}
+sample_information <- sample_information %>% filter(time != "24hr")
+fcounts_Fmat <- fcounts_Fmat[, sample_information$name]
+norm_mat_symbol <- norm_mat_symbol[, sample_information$name]
+```
+
+
+```{r message = FALSE, eval=FALSE}
+dds <- DESeqDataSetFromMatrix(fcounts_Fmat,
+  colData = sample_information,
+  design = ~treatment
+)
+```
+
+
+```{r}
+file_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230602_CDK2i_gastric_mouse/R_analysis/3.DGE/data/rds"
+
+DGE_list <- readRDS(file.path(file_dir, "DGE_list_notimepoint_no24hrsamples.rds"))
+```
+
+
+
+
+not yet done. check with cath if it is needed
+
+
+
+# ssGSEA
+
+```{r message=FALSE, results=FALSE}
+# make senescence_markers_df into a list
+# mmust be an simpler way to do this ...
+GSEA.list <- vector(mode = "list", length = length(senescence_markers_df$gs_name %>% unique()))
+for (i in 1:length(senescence_markers_df$gs_name %>% unique())) {
+  GSEA.list[[i]] <- senescence_markers_df %>%
+    filter(gs_name == unique(senescence_markers_df$gs_name)[i]) %>%
+    .$gene_symbol
+}
+names(GSEA.list) <- senescence_markers_df$gs_name %>% unique()
+
+GSEA.list$Jochems <- NULL
+
+# GSEA.list <- GSEA.list[5]
+
+Senscore_ssGSEA <- gsva(expr = norm_mat_symbol, gset.idx.list = GSEA.list, mx.diff = TRUE, verbose = TRUE, parallel.sz = 2, method = "ssgsea") %>% data.frame()
+```
+
+
+# Senscore ssGSEA boxplot 
+
+```{r}
+# up scores
+rownames(Senscore_ssGSEA)
+index_up <- c(1, 3, 5, 6)
+index_down <- c(2, 4)
+```
+
+```{r}
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA[index_up, ] %>% as_tibble(rownames = "group")
+Senscore_ssGSEA_ggplot <- gather(Senscore_ssGSEA_ggplot, key = names, value = value, -group)
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA_ggplot %>% separate(names, c("a", "b", "time", "treatment", "replicate"), remove = FALSE)
+
+
+Senscore_ssGSEA_ggplot$replicate <- factor(Senscore_ssGSEA_ggplot$replicate)
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA_ggplot %>% unite(time_treatment, time, treatment, remove = FALSE)
+Senscore_ssGSEA_ggplot$a <- NULL
+Senscore_ssGSEA_ggplot$b <- NULL
+
+
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA_ggplot %>% arrange(group, treatment)
+```
+
+```{r results=FALSE}
+my_comparisons <- list(c("control", "CDK2i"))
+
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+
+boxplot_col <- c(
+  "control" = "#0070B9",
+  "CDK2i" = "#FFC541"
+)
+
+Senscore_ssGSEA_ggplot %>% filter(group == "Casella_UP")
+t.test(x = c(0.1638525, 0.1832479, 0.1600299), y = c(0.3376492, 0.3420807, 0.3377224))
+
+
+Senscore_ssGSEA_ggplot %>% filter(group == "Casella_UP")
+Senscore_ssGSEA_ggplot %>% filter(group == "Fridman_UP")
+
+Senscore_ssGSEA_ggplot <- Senscore_ssGSEA_ggplot %>%
+  group_by(group) %>%
+  summarise(
+    names = names,
+    time_treatment = time_treatment,
+    time = time,
+    treatment = treatment,
+    replicate = replicate,
+    value = value,
+    relative_value = value / abs(mean(value[treatment == "control"]))
+  )
+
+Senscore_ssGSEA_ggplot$treatment <- Senscore_ssGSEA_ggplot$treatment %>% factor(levels = c("control", "CDK2i"))
+
+a1 <- Senscore_ssGSEA_ggplot %>%
+  ggplot(aes(x = treatment, y = relative_value)) +
+  geom_bar(aes(fill = treatment),
+    stat = "summary", fun = "mean",
+    position = position_dodge(), width = 1, show.legend = FALSE
+  ) +
+  scale_fill_manual(values = boxplot_col) +
+  stat_compare_means(comparisons = my_comparisons, label = "p.format", method = "t.test", bracket.size = 1.5) +
+  geom_jitter(aes(col = treatment), size = 2, stroke = 2, col = "black", width = 0.2) +
+  stat_summary(
+    fun.data = mean_sdl, fun.args = list(mult = 1),
+    geom = "errorbar", color = "black", width = 0.5, linewidth = 1
+  ) +
+  ylab("relative ssGSEA score") +
+  facet_grid(. ~ group) +
+  theme_prism() +
+  theme(
+    axis.text = element_text(color = "black", size = 15),
+    axis.title.y = element_text(color = "black", size = 20),
+    axis.title.x = element_blank(),
+    strip.text.x = element_text(size = 15)
+  )
+
+a1
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230602_CDK2i_gastric_mouse/R_analysis/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("gastricmouse_ssGSEAsenscore_boxplot.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 7
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+dev.off()
+```
+
+
+
+
+
+

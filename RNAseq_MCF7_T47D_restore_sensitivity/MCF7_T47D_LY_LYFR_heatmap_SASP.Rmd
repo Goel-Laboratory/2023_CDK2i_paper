@@ -1,0 +1,233 @@
+---
+title: "MCF7 T47D SASP"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+# load library
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r include = FALSE, message=FALSE}
+# load library
+
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(gplots)
+library(ggdendro)
+library(edgeR)
+library(clusterProfiler)
+library(ComplexHeatmap)
+library(UpSetR)
+library(GSVA)
+library(ggprism)
+```
+
+
+```{r echo=FALSE}
+# from preparation file
+# load(file = "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M/antonioahn/preparation/data/preparation.RData")
+load(file = "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/preparation/data/preparation.RData")
+
+load("/researchers/antonio.ahn/general/R/Download_resources/RData/mart_apr2019.RData")
+load("/researchers/antonio.ahn/general/R/Download_resources/RData/mart_aug2020.RData")
+```
+
+
+# SASP genes - only those upregulated in all 3 comparisons (PAR_LYvsDMSO, LYR_CDK2ivsDMSO, LYFR_CDK2ivsDMSO )
+
+## MCF7
+
+```{r}
+DE_list$MCF7M %>% names()
+# select out  "PAR_LYvsDMSO" "LYR_ARCvsDMSO" "LYFR_ARCvsDMSO"
+MCF7M_SASP_commonup <- DE_list$MCF7M[c(1, 4, 5)] %>%
+  lapply(function(x) {
+    x %>%
+      filter(SYMBOL %in% Demaria_SASP_df$gene_symbol & padj < 0.05 & logFC_MLE > 0) %>%
+      .$SYMBOL %>%
+      unique()
+  }) %>%
+  Reduce(intersect, .)
+```
+
+
+```{r}
+genes_input <- MCF7M_SASP_commonup
+cellline <- "MCF7M"
+
+genes_input <- intersect(genes_input, rownames(norm_mat_list[[cellline]]))
+sample_information_filt <- sample_information_list[[cellline]] %>% filter(!resist_treat %in% c("PAR_ARC", "PAR_LY.ARC"))
+samples_interest <- sample_information_filt$name
+heatmap_mat <- norm_mat_list[[cellline]][genes_input, samples_interest]
+# take out any rows with all zero's in the rows. This sometimes happens because when i only select out the PAR group, all zeros but its in the matrix because in the LYFR it is expressed. These are quite interesting... SASP genes that are not expressed at PAR but only expressed in LYFR. I wonder if these are expressed at PAR treated with LY + Fulv. shouldn't be? cuz Fulv brings most things down ...
+index <- apply(heatmap_mat, 1, function(row) all(row == 0))
+heatmap_mat <- heatmap_mat[!index, ]
+# generate z-score
+scaled.mat <- t(scale(t(heatmap_mat)))
+##### ----------------------------------------------------------------------------------------------------
+# column colors
+# incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+# column_color_treatment <- col_npg5[1:3]
+column_color_treatment <- c("#00A8E3", "#872464", "#FFC541")
+# column_color_resistance <- ggsci::pal_simpsons()(8)[1:3]
+column_color_resistance <- col_npg5[1:3]
+
+names(column_color_treatment) <- unique(sample_information_filt$treatment)
+names(column_color_resistance) <- unique(sample_information_filt$resistance)
+
+anno_colors <- list(
+  treatment = column_color_treatment,
+  resistance = column_color_resistance
+)
+# column annotations
+column_ha <- HeatmapAnnotation(
+  mean = anno_barplot(colMeans(scaled.mat), height = unit(2, "cm")),
+  treatment = sample_information_filt$treatment,
+  resistance = sample_information_filt$resistance,
+  col = anno_colors
+)
+
+genes_i <- c("TGFBI", "VEGFA", "IGFBP3", "CEACAM1", "HBEGF", "TGFB2", "TGFA")
+row_ha <- rowAnnotation(foo = anno_text(genes_i, gp = gpar(fontsize = 10)))
+
+genes_position <- match(genes_i, rownames(scaled.mat))
+row_ha <- rowAnnotation(foo = anno_mark(
+  at = genes_position,
+  labels = genes_i
+))
+# column split
+column_split <- factor(sample_information_filt$resistance, levels = c("PAR", "LYR", "LYFR"))
+##### ----------------------------------------------------------------------------------------------------
+# cell colors
+col.pan <- colorRampPalette(c("black", "dodgerblue3", "white", "orange", "red"))(100)
+##### ----------------------------------------------------------------------------------------------------
+# make heatmap
+# row_names_gp = gpar(fontsize = 7),
+a1 <- Heatmap(scaled.mat,
+  name = "z-score",
+  col = col.pan,
+  top_annotation = column_ha,
+  right_annotation = row_ha,
+  cluster_columns = FALSE,
+  row_km = 1, show_row_names = FALSE,
+  column_split = column_split
+)
+
+a1
+```
+
+
+## T47D 
+```{r}
+DE_list$T47D %>% names()
+# select out  "PAR_LYvsDMSO" "LYR_ARCvsDMSO" "LYFR_ARCvsDMSO"
+T47D_SASP_commonup <- DE_list$T47D[c(1, 4, 5)] %>%
+  lapply(function(x) {
+    x %>%
+      filter(SYMBOL %in% Demaria_SASP_df$gene_symbol & padj < 0.05 & logFC_MLE > 0) %>%
+      .$SYMBOL %>%
+      unique()
+  }) %>%
+  Reduce(intersect, .)
+```
+
+```{r}
+genes_input <- T47D_SASP_commonup
+cellline <- "T47D"
+
+genes_input <- intersect(genes_input, rownames(norm_mat_list[[cellline]]))
+sample_information_filt <- sample_information_list[[cellline]] %>% filter(!resist_treat %in% c("PAR_ARC", "PAR_LY.ARC"))
+samples_interest <- sample_information_filt$name
+heatmap_mat <- norm_mat_list[[cellline]][genes_input, samples_interest]
+# take out any rows with all zero's in the rows. This sometimes happens because when i only select out the PAR group, all zeros but its in the matrix because in the LYFR it is expressed. These are quite interesting... SASP genes that are not expressed at PAR but only expressed in LYFR. I wonder if these are expressed at PAR treated with LY + Fulv. shouldn't be? cuz Fulv brings most things down ...
+index <- apply(heatmap_mat, 1, function(row) all(row == 0))
+heatmap_mat <- heatmap_mat[!index, ]
+# generate z-score
+scaled.mat <- t(scale(t(heatmap_mat)))
+##### ----------------------------------------------------------------------------------------------------
+# column colors
+# incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+# column_color_treatment <- col_npg5[1:3]
+column_color_treatment <- c("#00A8E3", "#872464", "#FFC541")
+# column_color_resistance <- ggsci::pal_simpsons()(8)[1:3]
+column_color_resistance <- col_npg5[1:3]
+
+names(column_color_treatment) <- unique(sample_information_filt$treatment)
+names(column_color_resistance) <- unique(sample_information_filt$resistance)
+
+anno_colors <- list(
+  treatment = column_color_treatment,
+  resistance = column_color_resistance
+)
+# column annotations
+column_ha <- HeatmapAnnotation(
+  mean = anno_barplot(colMeans(scaled.mat), height = unit(2, "cm")),
+  treatment = sample_information_filt$treatment,
+  resistance = sample_information_filt$resistance,
+  col = anno_colors
+)
+
+genes_i <- c("TGFBI", "VEGFA", "IGFBP3", "CEACAM1", "HBEGF", "TGFB2", "TGFA")
+row_ha <- rowAnnotation(foo = anno_text(genes_i, gp = gpar(fontsize = 10)))
+
+genes_position <- match(genes_i, rownames(scaled.mat))
+row_ha <- rowAnnotation(foo = anno_mark(
+  at = genes_position,
+  labels = genes_i
+))
+# column split
+column_split <- factor(sample_information_filt$resistance, levels = c("PAR", "LYR", "LYFR"))
+##### ----------------------------------------------------------------------------------------------------
+# cell colors
+col.pan <- colorRampPalette(c("black", "dodgerblue3", "white", "orange", "red"))(100)
+##### ----------------------------------------------------------------------------------------------------
+# make heatmap
+# row_names_gp = gpar(fontsize = 7),
+a2 <- Heatmap(scaled.mat,
+  name = "z-score",
+  col = col.pan,
+  top_annotation = column_ha,
+  right_annotation = row_ha,
+  cluster_columns = FALSE,
+  row_km = 1, show_row_names = TRUE,
+  column_split = column_split
+)
+
+a2
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("overcomeresist_MCF7M_SASP_heatmap.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+
+a1
+dev.off()
+```

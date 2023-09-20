@@ -1,0 +1,137 @@
+---
+title: "OV5398PDX ssGSEA"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+
+# load library and data
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r echo=FALSE, results=FALSE, message=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(msigdbr)
+library(ComplexHeatmap)
+library(GSVA)
+library(ggprism)
+```
+
+```{r echo=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/1.QC/data/RData/prep.RData")
+```
+
+# ssGSEA
+
+```{r message=FALSE, results=FALSE}
+# make senescence_markers_df into a list
+# mmust be an simpler way to do this ...
+GSEA.list <- vector(mode = "list", length = length(senescence_markers_df$gs_name %>% unique()))
+for (i in 1:length(senescence_markers_df$gs_name %>% unique())) {
+  GSEA.list[[i]] <- senescence_markers_df %>%
+    filter(gs_name == unique(senescence_markers_df$gs_name)[i]) %>%
+    .$gene_symbol
+}
+names(GSEA.list) <- senescence_markers_df$gs_name %>% unique()
+
+GSEA.list$Jochems <- NULL
+
+
+Senscore_ssGSEA <- gsva(expr = norm_mat_symbol, gset.idx.list = GSEA.list, mx.diff = TRUE, verbose = TRUE, parallel.sz = 2, method = "ssgsea") %>% data.frame()
+```
+
+
+# heatmap 
+
+```{r}
+Senscore_ssGSEA
+index_up <- c(1, 3, 5, 6)
+# up
+scaled.mat <- t(scale(t(Senscore_ssGSEA[index_up, ])))
+# samples <- Senscore_ssGSEA %>% colnames
+# make_ssGSEA_MCF7M_hm(scaled.mat, s_interest = samples, gaps_col = c(12,17))
+```
+
+# heatmap
+                
+```{r}
+# genes_input  <- intersect(genes_input, rownames(norm_mat_list[[cellline]]))
+
+sample_information_filt <- sample_information
+
+
+scaled.mat <- t(scale(t(Senscore_ssGSEA[index_up, ])))
+##### ----------------------------------------------------------------------------------------------------
+# column colors
+# incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+# column_color_treatment <- col_npg5[1:3]
+column_color_treatment <- c("#00A8E3", "#872464", "#FFC541")
+# column_color_resistance <- ggsci::pal_simpsons()(8)[1:3]
+# column_color_resistance <- col_npg5[1:3]
+
+names(column_color_treatment) <- unique(sample_information_filt$treatment)
+# names(column_color_resistance) <- unique(sample_information_filt$resistance)
+
+anno_colors <- list(treatment = column_color_treatment)
+# resistance = column_color_resistance)
+# column annotations
+column_ha <- HeatmapAnnotation(
+  mean = anno_barplot(colMeans(scaled.mat), height = unit(2, "cm")),
+  treatment = sample_information_filt$treatment,
+  # resistance = sample_information_filt$resistance,
+  col = anno_colors
+)
+# column split
+column_split <- factor(sample_information_filt$treatment, levels = c("control", "CDK2i200mpkQD", "CDK2i100mpkBID"))
+##### ----------------------------------------------------------------------------------------------------
+# cell colors
+col.pan <- colorRampPalette(c("black", "dodgerblue3", "white", "orange", "red"))(100)
+##### ----------------------------------------------------------------------------------------------------
+# make heatmap
+a1 <- Heatmap(scaled.mat,
+  name = "z-score",
+  col = col.pan,
+  top_annotation = column_ha,
+  cluster_columns = FALSE, cluster_rows = FALSE,
+  row_km = 1, show_row_names = TRUE, row_names_gp = gpar(fontsize = 12),
+  column_split = column_split
+)
+
+a1
+```
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230704_OV5398PDX_OVCAR3_ARC_Veh_RNA/R_analysis/OV598PDX/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("OV5398PDX_ssGSEAsenscore_heatmap.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+
+a1
+
+dev.off()
+```
+

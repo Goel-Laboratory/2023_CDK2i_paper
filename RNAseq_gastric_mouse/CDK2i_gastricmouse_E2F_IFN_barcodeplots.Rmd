@@ -1,0 +1,498 @@
+---
+title: "gastric mouse barcodeplots"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+
+# load library
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r include = FALSE, message=FALSE}
+# load library
+
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(gplots)
+library(ashr)
+library(fgsea)
+library(ComplexHeatmap)
+library(UpSetR)
+library(enrichplot)
+library(clusterProfiler)
+```
+
+```{r echo=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230602_CDK2i_gastric_mouse/R_analysis/1.QC/data/RData/prep.RData")
+```
+
+
+```{r}
+sample_information <- sample_information %>% filter(time != "24hr")
+fcounts_Fmat <- fcounts_Fmat[, sample_information$name]
+norm_mat_symbol <- norm_mat_symbol[, sample_information$name]
+```
+
+
+```{r message = FALSE, eval=FALSE}
+dds <- DESeqDataSetFromMatrix(fcounts_Fmat,
+  colData = sample_information,
+  design = ~treatment
+)
+```
+
+
+```{r}
+file_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230602_CDK2i_gastric_mouse/R_analysis/3.DGE/data/rds"
+
+DGE_list <- readRDS(file.path(file_dir, "DGE_list_notimepoint_no24hrsamples.rds"))
+```
+
+
+# GSEA
+
+```{r results=FALSE, warning=FALSE}
+GSEA_get_ranks <- function(res_input) {
+  res_GSEA <- res_input %>%
+    dplyr::select(SYMBOL, logFC_MMSE) %>%
+    na.omit() %>% # remove NA
+    distinct() %>% # remove duplicated
+    group_by(SYMBOL) %>%
+    summarize(logFC_MMSE = mean(logFC_MMSE))
+
+  deframe(res_GSEA)
+}
+
+res_names <- DGE_list %>% names()
+GSEA_ranks <- vector(mode = "list", length = length(res_names))
+for (i in 1:length(GSEA_ranks)) {
+  GSEA_ranks[[i]] <- GSEA_get_ranks(DGE_list[[i]])
+}
+names(GSEA_ranks) <- res_names
+# GSEA_ranks %>% lapply(function(x){x %>% head(n= 1000 ) %>% tail(n=30)})
+```
+
+
+
+```{r message=FALSE}
+# running all GSEA using hallmark genesets
+gsea_output_HM <- vector(mode = "list", length = length(GSEA_ranks))
+
+for (i in 1:length(GSEA_ranks)) {
+  gsea_output_HM[[i]] <- GSEA(sort(GSEA_ranks[[i]], decreasing = TRUE), TERM2GENE = h_gene_sets, pvalueCutoff = 1.0, eps = 0)
+}
+
+names(gsea_output_HM) <- res_names
+
+gsea_df_HM <- gsea_output_HM %>% lapply(function(x) {
+  x %>% as_tibble()
+})
+```
+
+```{r}
+# %>% filter(padj < 0.2) %>%  arrange(desc(NES))
+gsea_df_HM$CDK2i_vs_control %>% datatable(caption = "CDK2i_vs_control")
+```
+
+
+```{r message=FALSE, eval=FALSE}
+# running all GSEA using all the msigDB gene-sets of interest
+gsea_output <- vector(mode = "list", length = length(GSEA_ranks))
+
+for (i in 1:length(GSEA_ranks)) {
+  gsea_output[[i]] <- GSEA(sort(GSEA_ranks[[i]], decreasing = TRUE), TERM2GENE = MSigDB.ofinterest, pvalueCutoff = 1.0, eps = 0)
+}
+
+names(gsea_output) <- res_names
+
+gsea_df <- gsea_output %>% lapply(function(x) {
+  x %>% as_tibble()
+})
+
+# %>% filter(padj < 0.2) %>%  arrange(desc(NES))
+gsea_df$CDK2i_vs_control %>% datatable(caption = "CDK2i_vs_control")
+
+combined_genesets_up <- gsea_df %>%
+  lapply(function(x) {
+    x %>%
+      filter(p.adjust < 0.05 & NES > 0) %>%
+      arrange(desc(NES)) %>%
+      .$ID %>%
+      head(n = 20)
+  }) %>%
+  unlist() %>%
+  unique()
+
+combined_genesets_down <- gsea_df %>%
+  lapply(function(x) {
+    x %>%
+      filter(p.adjust < 0.05 & NES < 0) %>%
+      arrange(NES) %>%
+      .$ID %>%
+      head(n = 20)
+  }) %>%
+  unlist() %>%
+  unique()
+
+combined_genesets <- c(combined_genesets_up, combined_genesets_down) %>% unique()
+
+# combined_genesets[combined_genesets == "REACTOME_REGULATION_OF_INSULIN_LIKE_GROWTH_FACTOR_IGF_TRANSPORT_AND_UPTAKE_BY_INSULIN_LIKE_GROWTH_FACTOR_BINDING_PROTEINS_IGFBPS"] <- "REACTOME_REGULATION_OF_INSULIN_LIKE_GROWTH_FACTOR"
+
+# combined_genesets[combined_genesets == "GOMF_OXIDOREDUCTASE_ACTIVITY_ACTING_ON_PAIRED_DONORS_WITH_INCORPORATION_OR_REDUCTION_OF_MOLECULAR_OXYGEN"] <- "GOMF_OXIDOREDUCTASE_ACTIVITY"
+
+
+GSEA_names <- gsub("res_", "", names(gsea_df))
+
+GSEA_ggplot <- data.frame()
+
+for (i in 1:length(GSEA_names)) {
+  temp <- gsea_df[[i]] %>%
+    mutate(group = GSEA_names[i]) %>%
+    dplyr::select(-leading_edge, -core_enrichment) %>%
+    filter(ID %in% combined_genesets)
+  GSEA_ggplot <- rbind(GSEA_ggplot, temp)
+}
+
+GSEA_ggplot$ID <- GSEA_ggplot$ID %>% factor(levels = combined_genesets)
+GSEA_ggplot$group <- factor(GSEA_ggplot$group, levels = GSEA_names)
+
+
+GSEA_ggplot$NES %>% range()
+# decided not to use this but the heatmap instead
+GSEA_ggplot %>%
+  ggplot(aes(x = group, y = ID, fill = NES)) +
+  scale_fill_gradientn(colours = c("dodgerblue3", "white", "orange"), limits = c(-3, 3)) +
+  geom_tile() +
+  geom_tile(data = filter(GSEA_ggplot, p.adjust > 0.05), fill = "white") +
+  geom_text(aes(label = sprintf("%0.2f", NES))) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black", size = 12),
+    axis.text.y = element_text(color = "black", size = 10),
+    axis.title.y = element_blank(),
+    axis.title.x = element_blank(),
+    legend.position = "bottom"
+  ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+GSEA_ggplot$NES %>% range()
+GSEA_ggplot$p.adjust[GSEA_ggplot$p.adjust > 0.05] <- NA
+
+# decided not to use this but the heatmap instead
+GSEA_ggplot %>%
+  ggplot(aes(x = group, y = ID, col = NES)) +
+  scale_color_gradientn(colours = c("dodgerblue3", "white", "orange")) +
+  geom_point(aes(size = -log10(p.adjust))) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black", size = 12),
+    axis.text.y = element_text(color = "black", size = 10),
+    axis.title.y = element_blank(),
+    axis.title.x = element_blank(),
+    legend.position = "right"
+  )
+```
+
+
+# plots - hallmark genesets
+
+```{r echo=FALSE, results=FALSE}
+combined_genesets_up <- gsea_df_HM %>%
+  lapply(function(x) {
+    x %>%
+      filter(p.adjust < 0.05 & NES > 0) %>%
+      arrange(desc(NES)) %>%
+      .$ID %>%
+      head(n = 10)
+  }) %>%
+  unlist() %>%
+  unique()
+
+combined_genesets_down <- gsea_df_HM %>%
+  lapply(function(x) {
+    x %>%
+      filter(p.adjust < 0.05 & NES < 0) %>%
+      arrange(NES) %>%
+      .$ID %>%
+      head(n = 10)
+  }) %>%
+  unlist() %>%
+  unique()
+
+combined_genesets <- c(combined_genesets_up, combined_genesets_down) %>% unique()
+```
+
+
+```{r echo=FALSE, results=FALSE}
+GSEA_names <- gsub("res_", "", names(gsea_df_HM))
+
+GSEA_ggplot <- data.frame()
+
+for (i in 1:length(GSEA_names)) {
+  temp <- gsea_df_HM[[i]] %>%
+    mutate(group = GSEA_names[i]) %>%
+    dplyr::select(-leading_edge, -core_enrichment) %>%
+    filter(ID %in% combined_genesets)
+  GSEA_ggplot <- rbind(GSEA_ggplot, temp)
+}
+
+GSEA_ggplot$ID <- GSEA_ggplot$ID %>% factor(levels = combined_genesets)
+GSEA_ggplot$group <- factor(GSEA_ggplot$group, levels = GSEA_names)
+
+
+# GSEA_ggplot$NES[GSEA_ggplot$p.adjust > 0.05] <- NA
+```
+
+```{r echo=FALSE, results=FALSE, fig.height = 8, fig.width=7 }
+# GSEA_ggplot  %>%
+#  ggplot(aes(x = group, y = ID,  fill =  NES)) +
+#  geom_tile() +
+#  scale_fill_gradientn(colours = c("blue","white", "red"), limits = c(-2,2)) +
+#  geom_tile(data = filter(GSEA_ggplot, p.adjust > 0.05), fill = "orange")
+
+
+#  geom_tile(data = filter(GSEA_ggplot, p.adjust > 0.05), aes(x = group, y=ID, fill = "orange"))
+
+GSEA_ggplot$NES %>% range()
+# decided not to use this but the heatmap instead
+GSEA_ggplot %>%
+  ggplot(aes(x = group, y = ID, fill = NES)) +
+  scale_fill_gradientn(colours = c("dodgerblue3", "white", "orange"), limits = c(-3, 3)) +
+  geom_tile() +
+  geom_tile(data = filter(GSEA_ggplot, p.adjust > 0.05), fill = "white") +
+  geom_text(aes(label = sprintf("%0.2f", NES))) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black", size = 12),
+    axis.text.y = element_text(color = "black", size = 10),
+    axis.title.y = element_blank(),
+    axis.title.x = element_blank(),
+    legend.position = "bottom"
+  ) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+```
+
+```{r echo=FALSE, results=FALSE, fig.height = 8, fig.width=6}
+GSEA_ggplot$NES %>% range()
+GSEA_ggplot$p.adjust[GSEA_ggplot$p.adjust > 0.05] <- NA
+
+# decided not to use this but the heatmap instead
+GSEA_ggplot %>%
+  ggplot(aes(x = group, y = ID, col = NES)) +
+  # scale_fill_gradientn(colours = c("dodgerblue3","white", "orange"), limits = c(-4,4)) +
+  scale_color_gradientn(colours = c("dodgerblue3", "white", "orange")) +
+  geom_point(aes(size = -log10(p.adjust))) +
+  # geom_tile() +
+  # geom_tile(data = filter(GSEA_ggplot, p.adjust > 0.05), fill = "white") +
+  # geom_text(aes(label = sprintf("%0.2f",NES))) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black", size = 12),
+    axis.text.y = element_text(color = "black", size = 10),
+    axis.title.y = element_blank(),
+    axis.title.x = element_blank(),
+    legend.position = "right"
+  )
+# theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+```
+
+# preparation for barcode 
+```{r}
+# barcode plot setup
+# idea from # https://github.com/YuLab-SMU/DOSE/issues/23
+
+# from https://github.com/YuLab-SMU/enrichplot/blob/devel/R/gseaplot.R
+gsInfo <- function(object, geneSetID) {
+  geneList <- object@geneList
+
+  if (is.numeric(geneSetID)) {
+    geneSetID <- object@result[geneSetID, "ID"]
+  }
+
+  geneSet <- object@geneSets[[geneSetID]]
+  exponent <- object@params[["exponent"]]
+  df <- gseaScores(geneList, geneSet, exponent, fortify = TRUE)
+  df$ymin <- 0
+  df$ymax <- 0
+  pos <- df$position == 1
+  h <- diff(range(df$runningScore)) / 20
+  df$ymin[pos] <- -h
+  df$ymax[pos] <- h
+  df$geneList <- geneList
+  if (length(object@gene2Symbol) == 0) {
+    df$gene <- names(geneList)
+  } else {
+    df$gene <- object@gene2Symbol[names(geneList)]
+  }
+
+  df$Description <- object@result[geneSetID, "Description"]
+  return(df)
+}
+
+# https://rdrr.io/bioc/DOSE/src/R/gsea.R
+gseaScores <- function(geneList, geneSet, exponent = 1, fortify = FALSE) {
+  ###################################################################
+  ##    geneList                                                   ##
+  ##                                                               ##
+  ## 1. Rank order the N genes in D to form L = { g_1, ... , g_N}  ##
+  ##    according to the correlation, r(g_j)=r_j,                  ##
+  ##    of their expression profiles with C.                       ##
+  ##                                                               ##
+  ###################################################################
+
+  ###################################################################
+  ##    exponent                                                   ##
+  ##                                                               ##
+  ## An exponent p to control the weight of the step.              ##
+  ##   When p = 0, Enrichment Score ( ES(S) ) reduces to           ##
+  ##   the standard Kolmogorov-Smirnov statistic.                  ##
+  ##   When p = 1, we are weighting the genes in S                 ##
+  ##   by their correlation with C normalized                      ##
+  ##   by the sum of the correlations over all of the genes in S.  ##
+  ##                                                               ##
+  ###################################################################
+
+  ## genes defined in geneSet should appear in geneList.
+  ## this is a must, see https://github.com/GuangchuangYu/DOSE/issues/23
+  geneSet <- intersect(geneSet, names(geneList))
+
+  N <- length(geneList)
+  Nh <- length(geneSet)
+
+  Phit <- Pmiss <- numeric(N)
+  hits <- names(geneList) %in% geneSet ## logical
+
+  Phit[hits] <- abs(geneList[hits])^exponent
+  NR <- sum(Phit)
+  Phit <- cumsum(Phit / NR)
+
+  Pmiss[!hits] <- 1 / (N - Nh)
+  Pmiss <- cumsum(Pmiss)
+
+  runningES <- Phit - Pmiss
+
+  ## ES is the maximum deviation from zero of Phit-Pmiss
+  max.ES <- max(runningES)
+  min.ES <- min(runningES)
+  if (abs(max.ES) > abs(min.ES)) {
+    ES <- max.ES
+  } else {
+    ES <- min.ES
+  }
+
+  df <- data.frame(
+    x = seq_along(runningES),
+    runningScore = runningES,
+    position = as.integer(hits)
+  )
+
+  if (fortify == TRUE) {
+    return(df)
+  }
+
+  df$gene <- names(geneList)
+  res <- list(ES = ES, runningES = df)
+  return(res)
+}
+
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+```
+
+# barcodeplots for paper
+
+
+```{r}
+make_single_barcode <- function(gsea_output, geneset, addtotitle) {
+  title_numbers <- gsea_output %>%
+    as_tibble() %>%
+    filter(ID == geneset) %>%
+    dplyr::select(NES, p.adjust) %>%
+    unlist()
+
+  title_numbers <- title_numbers %>%
+    signif(digits = 3) %>%
+    as.character()
+  ggplot_title <- c("gastricmouse", geneset, title_numbers) %>% paste(collapse = " ")
+
+  barcode_1 <- gsInfo(gsea_output, geneSetID = geneset)
+
+  # barcode_1$group <- barcode_1$group %>% factor(level = c("CDK2i200mpkQD_vs_control", "CDK2i100mpkBID_vs_control"))
+
+  a1 <- barcode_1 %>% ggplot(aes(x = x, y = runningScore, col = incyclix_col[1])) +
+    geom_line(alpha = 1, size = 3) +
+    #  |> partition(vars(group)) |> blend("multiply")
+    # geom_point(aes(color = Treatment), alpha = 0.5, size = 0.7) +
+    # scale_color_manual(values = c(LYvsDMSO = "#00B938", LYSRvsLY = "#609CFF"),
+    # labels = c(LYvsDMSO = "Abema vs DMSO", LYSRvsLY = "Abema+SR11302 vs Abema")) +
+    geom_hline(yintercept = 0, size = 0.4) +
+    ggtitle(paste(addtotitle, ggplot_title)) +
+    xlab("Rank in Ordered Dataset") +
+    ylab("Running Enrichment score") +
+    scale_color_manual(values = incyclix_col[1]) +
+    # ylim(-0.2,0.2) +
+    theme_bw() +
+    # theme(panel.background = element_rect(fill = "white")) +
+    theme(
+      axis.text = element_text(size = 15),
+      axis.title = element_text(size = 20),
+      plot.title = element_text(hjust = 0.5, size = 12),
+      # panel.grid.minor = element_blank(),
+      axis.line = element_line(colour = "black"),
+      legend.position = "none",
+      legend.title = element_blank()
+    )
+
+  print(a1)
+}
+```
+
+```{r}
+make_single_barcode(gsea_output_HM$CDK2i_vs_control, "HALLMARK_INTERFERON_ALPHA_RESPONSE", "CDK2i_vs_control")
+make_single_barcode(gsea_output_HM$CDK2i_vs_control, "HALLMARK_INTERFERON_GAMMA_RESPONSE", "CDK2i_vs_control")
+make_single_barcode(gsea_output_HM$CDK2i_vs_control, "HALLMARK_E2F_TARGETS", "CDK2i_vs_control")
+```
+
+uptohere
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230602_CDK2i_gastric_mouse/R_analysis/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+# ggsave(file="OV5398PDX_E2Fbarcode_test.svg", plot=a1, width=10, height=8)
+
+
+genesets_i <- c("HALLMARK_INTERFERON_ALPHA_RESPONSE", "HALLMARK_INTERFERON_GAMMA_RESPONSE", "HALLMARK_E2F_TARGETS")
+comparisons_i <- c("CDK2i_vs_control")
+
+for (i in genesets_i) {
+  for (j in comparisons_i) {
+    pdf(paste0("gastricmouse_", i, "_", j, ".pdf"),
+      width = 8, # 5 x 300 pixels
+      height = 4
+    ) # 300 pixels per inch)        # smaller font size
+
+    make_single_barcode(gsea_output_HM[[j]], i, j)
+
+    dev.off()
+  }
+}
+```
+
+

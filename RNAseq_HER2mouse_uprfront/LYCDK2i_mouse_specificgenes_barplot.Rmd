@@ -1,0 +1,172 @@
+---
+title: "HER2 mouse barplot"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+# load library and data
+
+```{r echo=FALSE, results=FALSE, message=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(msigdbr)
+library(ggdendro)
+library(rcartocolor)
+library(ComplexHeatmap)
+library(ggprism)
+```
+
+```{r echo=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230720_ABEMA_ARC_COMBO_VEH_primary_mouse_tumour_upfront/R_analysis/1.QC_prep/data/RData/prep.RData")
+```
+
+```{r echo=FALSE}
+file_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/230720_ABEMA_ARC_COMBO_VEH_primary_mouse_tumour_upfront/R_analysis/3.DGE/data/rds"
+
+DGE_list <- readRDS(file.path(file_dir, "DGE_list.rds"))
+```
+
+
+
+```{r}
+normmat_ggplot_nonlog <- norm_mat_symbol %>% as.data.frame()
+normmat_ggplot_nonlog$genesym <- rownames(normmat_ggplot_nonlog)
+normmat_ggplot_nonlog <- gather(normmat_ggplot_nonlog, key = samples, value = values, -genesym)
+
+normmat_ggplot_nonlog <- normmat_ggplot_nonlog %>% separate(samples, into = c("treatment", "mouse", "replicate"), sep = "_", remove = FALSE)
+normmat_ggplot_nonlog$treatment <- factor(normmat_ggplot_nonlog$treatment)
+normmat_ggplot_nonlog$replicate <- factor(normmat_ggplot_nonlog$replicate)
+
+# normmat_ggplot_nonlog <- normmat_ggplot_nonlog %>% unite(ID_replicate, ID, replicate, remove = FALSE)
+
+normmat_ggplot_nonlog$treatment <- normmat_ggplot_nonlog$treatment %>% factor(levels = c("Veh", "LY", "INX", "LY.INX"))
+```
+
+
+```{r}
+incyclix_col <- c("#00A8E3", "#872464", "#FFC541", "#0070B9")
+boxplot_col <- c(
+  "Veh" = "#00A8E3",
+  "LY" = "#872464",
+  "INX" = "#FFC541",
+  "LY.INX" = "#0070B9"
+)
+```
+
+
+
+```{r}
+# genes <- "Mki67"
+# jittersize <- 2
+
+ggplot_gene_relative <- function(genes, jittersize = 2) {
+  plot_df <- dplyr::filter(
+    normmat_ggplot_nonlog,
+    genesym %in% genes
+  ) %>% arrange(genesym)
+
+
+
+  plot_df <- plot_df %>%
+    summarise(
+      names = samples,
+      treatment = treatment,
+      replicate = replicate,
+      value = values,
+      relative_value = value / abs(mean(value[treatment == "Veh"]))
+    )
+
+  max_value <- max(plot_df$relative_value) + 0.2
+
+  pvalue_manual_1 <- DGE_list$LY_vs_Veh %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "LY", group2 = "Veh") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value)
+
+  pvalue_manual_2 <- DGE_list$INX_vs_Veh %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "INX", group2 = "Veh") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value + 0.2)
+
+  pvalue_manual_3 <- DGE_list$LY.INX_vs_Veh %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "LY.INX", group2 = "Veh") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value + 0.4)
+
+  pvalue_manual_4 <- DGE_list$LY.INX_vs_LY %>%
+    filter(SYMBOL %in% genes) %>%
+    dplyr::select(SYMBOL, padj) %>%
+    mutate(group1 = "LY.INX", group2 = "LY") %>%
+    dplyr::rename("genesym" = "SYMBOL") %>%
+    mutate(y.position = max_value + 0.6)
+
+
+  pvalue_manual <- rbind(pvalue_manual_1, pvalue_manual_2) %>%
+    rbind(pvalue_manual_3) %>%
+    rbind(pvalue_manual_4)
+
+  plot_df$treatment <- plot_df$treatment %>% factor(levels = c("Veh", "LY", "INX", "LY.INX"))
+
+  a1 <- plot_df %>%
+    ggplot(aes(x = treatment, y = relative_value)) +
+    # geom_boxplot(lwd=1, show.legend=FALSE) +
+    # geom_bar(stat="identity",
+    # position=position_dodge()) +
+    # geom_errorbar(aes(ymin=len-sd, ymax=len+sd), width=.2,
+    # position=position_dodge(.9))  +
+    # geom_errorbar() +
+    geom_bar(aes(fill = treatment),
+      stat = "summary", fun = "mean",
+      position = position_dodge(), width = 1, show.legend = FALSE
+    ) +
+    geom_jitter(aes(col = treatment), size = jittersize, color = "black", stroke = 3) +
+    # stat_summary(fun=mean, geom="point", color="red") +
+    scale_fill_manual(values = boxplot_col) +
+    stat_pvalue_manual(pvalue_manual, label = "padj", bracket.size = 1.5) +
+    # stat_compare_means(comparisons = my_comparisons, label = "p.format", method = "t.test", bracket.size = 1.5) +
+    stat_summary(
+      fun.data = mean_sdl, fun.args = list(mult = 1),
+      geom = "errorbar", color = "black", width = 0.5, linewidth = 0.5
+    ) +
+    ylab("relative mRNA expression") +
+    # ggtitle(cellline) +
+    facet_grid(. ~ genesym) +
+    theme_prism() +
+    theme(
+      axis.text.y = element_text(color = "black", size = 20),
+      axis.text.x = element_text(color = "black", size = 20, angle = 45, hjust = 1, vjust = 1),
+      axis.title.y = element_text(color = "black", size = 25),
+      axis.title.x = element_blank(),
+      strip.text.x = element_text(size = 20)
+    )
+
+  print(a1)
+}
+```
+
+```{r}
+ggplot_gene_relative("Mki67")
+ggplot_gene_relative("Mcm2")
+ggplot_gene_relative("Mcm7")
+```

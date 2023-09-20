@@ -1,0 +1,179 @@
+---
+title: "Diffbind Counts"
+---
+
+load libraries
+
+```{r}
+# .libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2","/config/binaries/R/4.2.0/R_libraries","/config/binaries/R/4.2.0/lib64/R/library"))
+.libPaths(.libPaths()[2])
+```
+
+``` {r message=FALSE, warning=FALSE}
+library(DiffBind)
+library(rtracklayer)
+library(tidyverse)
+library(ChIPseeker)
+library(ggrepel)
+library(RColorBrewer)
+library(DESeq2)
+library(cowplot)
+library(Rsamtools)
+library(ggdendro)
+library(fgsea)
+library("BiocParallel")
+library(ChIPpeakAnno)
+library(VennDiagram)
+library(DT)
+library(GenomicFeatures)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(ggpubr)
+library(ggprism)
+```
+
+
+# load
+
+```{r eval=FALSE}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/1.overcome_resist_LYvsDMSO/1.overview/data/RData/overcome_resist.RData")
+```
+
+
+
+```{r results=FALSE}
+# need to re-obtain the count dataframe that is not logged to get relative values
+dbObj_counts_summit <- readRDS("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/2.diffbind_QC/data/rds_files/dbObj_counts_summit.rds")
+count_mat_all <- dba.peakset(dbObj_counts_summit$all, bRetrieve = TRUE, DataType = DBA_DATA_FRAME)
+count_mat_all <- count_mat_all %>%
+  unite(col = ID, c("CHR", "START", "END")) %>%
+  data.frame(row.names = "ID")
+```
+
+```{r}
+df_i_down <- count_mat_all[get_heatmap_regions(db_down$ParLY_vs_ParDMSO), samples_interest] %>% as_tibble(rownames = "ID")
+df_i_down %>% dim()
+
+df_i_down <- df_i_down %>% gather(key = "sample", value = value, -ID)
+df_i_down$sample <- factor(df_i_down$sample, levels = unique(df_i_down$sample))
+
+# add in groups so i can group them into the resistance status
+PAR_s <- sample_information_filt %>%
+  filter(resistance == "Par") %>%
+  .$SampleID
+LYR_s <- sample_information_filt %>%
+  filter(resistance == "LYR") %>%
+  .$SampleID
+LYFR_s <- sample_information_filt %>%
+  filter(resistance == "LYFR") %>%
+  .$SampleID
+
+df_i_down$resist <- ifelse(df_i_down$sample %in% PAR_s, "PAR",
+  ifelse(df_i_down$sample %in% LYR_s, "LYR", "LYFR")
+)
+
+s1 <- sample_information_filt %>%
+  filter(resistance_treatment == "Par_DMSO") %>%
+  .$SampleID
+s2 <- sample_information_filt %>%
+  filter(resistance_treatment == "Par_LY") %>%
+  .$SampleID
+s3 <- sample_information_filt %>%
+  filter(resistance_treatment == "LYR_DMSO") %>%
+  .$SampleID
+s4 <- sample_information_filt %>%
+  filter(resistance_treatment == "LYR_ARC") %>%
+  .$SampleID
+s5 <- sample_information_filt %>%
+  filter(resistance_treatment == "LYFR_DMSO") %>%
+  .$SampleID
+s6 <- sample_information_filt %>%
+  filter(resistance_treatment == "LYFR_ARC") %>%
+  .$SampleID
+
+
+df_i_down$resist_treat <- ifelse(df_i_down$sample %in% s1, "PAR_DMSO",
+  ifelse(df_i_down$sample %in% s2, "PAR_LY",
+    ifelse(df_i_down$sample %in% s3, "LYR_DMSO",
+      ifelse(df_i_down$sample %in% s4, "LYR_ARC",
+        ifelse(df_i_down$sample %in% s5, "LYFR_DMSO", "LYFR_ARC")
+      )
+    )
+  )
+)
+
+
+
+# RColorBrewer::brewer.pal(12, "Paired") %>% show_col()
+# paired colors
+col_p <- RColorBrewer::brewer.pal(12, "Paired")[c(1:4, 9, 10)]
+
+
+df_i_down$resist_treat <- df_i_down$resist_treat %>% factor(levels = unique(df_i_down$resist_treat))
+df_i_down$resist <- df_i_down$resist %>% factor(levels = unique(df_i_down$resist))
+
+df_i_down <- tidyr::separate(df_i_down, sample, into = c("state", "treatment", "replicate"), remove = FALSE)
+
+df_i_down$treatment_group <- df_i_down$treatment %>% factor(levels = c("DMSO", "LY", "ARC"), labels = c("DMSO", "treatment", "treatment"))
+
+df_i_down <- tidyr::unite(df_i_down, col = "treat_rep", treatment, replicate, remove = FALSE)
+df_i_down$treat_rep_group <- df_i_down$treat_rep %>%
+  gsub("LY", "treatment", .) %>%
+  gsub("ARC", "treatment", .)
+
+df_i_down$treatment_group <- ifelse(df_i_down$treatment %in% c("LY", "ARC"), "treatment", "DMSO")
+```
+
+
+```{r}
+plot_df <- df_i_down %>%
+  group_by(ID, resist) %>%
+  summarise(
+    names = sample,
+    state = state,
+    ID = ID,
+    treatment_group = treatment_group,
+    treat_rep = treat_rep,
+    resist_treat = resist_treat,
+    resist = resist,
+    value = value,
+    replicate = replicate,
+    relative_value = value / abs(mean(value[treatment == "DMSO"]))
+  )
+
+
+plot_df %>% ggplot(aes(x = treatment_group, y = relative_value, col = resist_treat)) +
+  geom_violin(show.legend = FALSE) +
+  geom_boxplot(width = 0.1) +
+  scale_color_manual(values = boxplot_col) +
+  ylab("relative accessibility") +
+  facet_grid(~resist, scales = "free") +
+  theme_prism() +
+  stat_compare_means(comparisons = list(c("DMSO", "treatment"))) +
+  # stat_compare_means(method = "anova") +
+  # stat_compare_means(comparisons = list(c("PAR", "LYR", "LYFR"))) +
+  # stat_compare_means(label = "p.format") +
+  #  axis.text.x = element_text(angle=45, hjust =1)
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(size = 25),
+    legend.title = element_blank(),
+    axis.text = element_text(size = 15),
+    strip.text.x = element_text(size = 20)
+  )
+```
+
+when looking at a global level, can see that there are some Inf (infinity) values, because there were zero counts at the DMSO of these groups
+also in some cases, at DMSO, the value is very small so then after ARC it becomes a very large number and skews the figure
+```{r}
+plot_df %>% filter(relative_value > 10)
+plot_df %>%
+  filter(ID == "chr15_71091657_71091857") %>%
+  data.frame()
+plot_df %>%
+  filter(ID == "chr1_40274448_40274648") %>%
+  data.frame()
+```
+
+
+
+           

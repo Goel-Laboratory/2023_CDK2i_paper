@@ -1,0 +1,190 @@
+---
+title: "ChipEnrich"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+Information 
+- ARC is INX315
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+# .libPaths(.libPaths()[2])
+```
+
+
+# load libraries
+
+
+``` {r message=FALSE, warning=FALSE}
+library(DiffBind)
+library(rtracklayer)
+library(tidyverse)
+library(ChIPseeker)
+library(ggrepel)
+library(RColorBrewer)
+library(DESeq2)
+library(cowplot)
+library(Rsamtools)
+library(ggdendro)
+library("BiocParallel")
+library(ChIPpeakAnno)
+library(VennDiagram)
+library(rcartocolor)
+library(GenomicFeatures)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(ggpubr)
+library(ggprism)
+library("chipenrich")
+```
+
+
+# load
+
+```{r echo=FALSE}
+# load previously analysed R Dataset
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/1.overcome_resist_LYvsDMSO/1.overview/data/RData/overcome_resist.RData")
+```
+
+# ChIPenrich
+
+```{r}
+db_down %>% lapply(length)
+```
+
+
+```{r}
+# strange the chipenrich does not take in a GRanges object but a dataframe
+GRanges_to_BED <- function(gr) {
+  data.frame(
+    chrom = seqnames(gr),
+    start = start(gr) - 1,
+    end = end(gr),
+    #  names=c(rep(".", length(gr))),
+    #  scores=c(rep(".", length(gr))),
+    strands = strand(gr)
+  )
+}
+```
+
+```{r message=FALSE, warning=FALSE}
+db_down %>% lapply(function(x) {
+  x %>%
+    GRanges_to_BED() %>%
+    plot_dist_to_tss(genome = "hg38")
+})
+```
+
+```{r message=FALSE, warning=FALSE}
+db_down %>% lapply(length)
+chipenrich_down <- db_down %>% lapply(function(x) {
+  chipenrich(
+    peaks = x %>% GRanges_to_BED(),
+    method = "chipenrich",
+    locusdef = "nearest_tss",
+    genome = "hg38",
+    out_name = NULL,
+    genesets = "hallmark",
+    n_cores = 5
+  )
+})
+
+
+chipenrich_down_df <- chipenrich_down %>% lapply(function(x) {
+  x$results %>%
+    as_tibble() %>%
+    mutate(Gene.Ratio = N.Geneset.Peak.Genes / N.Geneset.Genes)
+})
+```
+
+```{r message=FALSE, warning=FALSE}
+combined_genesets <- chipenrich_down_df %>%
+  lapply(function(x) {
+    x %>%
+      filter(FDR < 0.05) %>%
+      arrange(FDR) %>%
+      .$Geneset.ID %>%
+      head(n = 5)
+  }) %>%
+  unlist() %>%
+  unique()
+```
+
+
+```{r message=FALSE, warning=FALSE}
+compare_names <- names(chipenrich_down_df)
+
+chipenrich_ggplot <- c()
+
+for (i in 1:length(compare_names)) {
+  temp <- chipenrich_down_df[[i]] %>%
+    mutate(group = compare_names[i]) %>%
+    dplyr::select(-Geneset.Peak.Genes) %>%
+    filter(Geneset.ID %in% combined_genesets)
+
+  chipenrich_ggplot <- rbind(chipenrich_ggplot, temp)
+}
+
+chipenrich_ggplot$group <- factor(chipenrich_ggplot$group, levels = compare_names)
+
+combined_genesets_neworder <- chipenrich_ggplot %>%
+  group_by(Geneset.ID) %>%
+  summarize(mean = mean(-log10(FDR))) %>%
+  arrange(desc(mean)) %>%
+  .$Geneset.ID
+
+chipenrich_ggplot$Geneset.ID <- chipenrich_ggplot$Geneset.ID %>% factor(levels = combined_genesets_neworder)
+```
+
+
+```{r}
+# my_colors = carto_pal(3, "RedOr")
+
+my_colors <- RColorBrewer::brewer.pal(9, "Blues")
+chipenrich_ggplot$FDR[chipenrich_ggplot$FDR > 0.05] <- NA
+
+
+# decided not to use this but the heatmap instead
+a1 <- chipenrich_ggplot %>%
+  ggplot(aes(x = group, y = Geneset.ID, col = Gene.Ratio)) +
+  # scale_fill_gradientn(colours = c("dodgerblue3","white", "orange"), limits = c(-4,4)) +
+  scale_color_gradientn(colours = c(my_colors[3], my_colors[6], my_colors[9])) +
+  # scale_color_gradientn(colours = c("dodgerblue3", "orange")) +
+  geom_point(aes(size = -log10(FDR))) +
+  scale_y_discrete(limits = rev) +
+  # geom_tile() +
+  # geom_tile(data = filter(chipenrich_ggplot, FDR > 0.05), fill = "white") +
+  # geom_text(aes(label = sprintf("%0.2f",NES))) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black", size = 12),
+    axis.text.y = element_text(color = "black", size = 10),
+    axis.title.y = element_blank(),
+    axis.title.x = element_blank(),
+    legend.position = "right"
+  )
+
+a1
+```
+
+
+```{r eval=FALSE, echo=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("overcomeresist_ATAC_downpeaks_chipenrich.pdf",
+  width = 6, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+dev.off()
+```

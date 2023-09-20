@@ -1,0 +1,178 @@
+---
+title: "Diffbind Counts"
+---
+
+load libraries
+
+```{r}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+# .libPaths(.libPaths()[2])
+```
+
+``` {r message=FALSE, warning=FALSE}
+library(DiffBind)
+library(rtracklayer)
+library(tidyverse)
+library(ChIPseeker)
+library(ggrepel)
+library(RColorBrewer)
+library(DESeq2)
+library(cowplot)
+library(Rsamtools)
+library(ggdendro)
+library(fgsea)
+library("BiocParallel")
+library(ChIPpeakAnno)
+library(VennDiagram)
+library(DT)
+library(GenomicFeatures)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(ggpubr)
+library(ggprism)
+```
+
+
+# load
+
+```{r}
+load("/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/1.overcome_resist_LYvsDMSO/1.overview/data/RData/overcome_resist.RData")
+```
+
+```{r}
+file_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/1.overcome_resist_LYvsDMSO/2.annotations/data/rds"
+
+db_up_peakAnno <- readRDS(file.path(file_dir, "db_up_peakAnno.rds"))
+db_down_peakAnno <- readRDS(file.path(file_dir, "db_down_peakAnno.rds"))
+db_report_peakAnno <- readRDS(file.path(file_dir, "db_report_peakAnno.rds"))
+```
+
+
+
+# preparation: annotation for all groups combined
+
+```{r}
+# copied and pasted from /researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/1.overcome_resist_LYvsDMSO/2.annotations/20230125_ATAC_CDK2i_diffbind_overcomeresist_annotations.Rmd
+db_up_peakAnno %>% lapply(function(x) {
+  temp <- x@anno$annotation_expand %>%
+    table() %>%
+    prop.table() %>%
+    data.frame()
+  colnames(temp) <- c("Feature", "Frequency")
+  temp <- mutate(temp, group = names(db_up_peakAnno)[1])
+  temp
+})
+
+
+db_up_df <- c()
+for (i in 1:length(db_up_peakAnno)) {
+  temp <- db_up_peakAnno[[i]]@anno$annotation_expand %>%
+    table() %>%
+    data.frame()
+  temp$proportion <- db_up_peakAnno[[i]]@anno$annotation_expand %>%
+    table() %>%
+    prop.table() %>%
+    round(digits = 3)
+  colnames(temp) <- c("feature", "frequency", "proportion")
+  temp <- mutate(temp, group = names(db_up_peakAnno)[i])
+  db_up_df <- rbind(db_up_df, temp)
+}
+
+db_up_df$group <- db_up_df$group %>% factor(
+  levels = c("ParLY_vs_ParDMSO", "LYRARC_vs_LYRDMSO", "LYFRARC_vs_LYFRDMSO"),
+  labels = c("Par_LY", "LYR_CDK2i", "LYFR_CDK2i")
+)
+
+db_up_df$direction <- "up"
+
+db_down_df <- c()
+for (i in 1:length(db_down_peakAnno)) {
+  temp <- db_down_peakAnno[[i]]@anno$annotation_expand %>%
+    table() %>%
+    data.frame()
+  temp$proportion <- db_down_peakAnno[[i]]@anno$annotation_expand %>%
+    table() %>%
+    prop.table() %>%
+    round(digits = 3)
+  colnames(temp) <- c("feature", "frequency", "proportion")
+  temp <- mutate(temp, group = names(db_down_peakAnno)[i])
+  db_down_df <- rbind(db_down_df, temp)
+}
+
+db_down_df$group <- db_down_df$group %>% factor(
+  levels = c("ParLY_vs_ParDMSO", "LYRARC_vs_LYRDMSO", "LYFRARC_vs_LYFRDMSO"),
+  labels = c("Par_LY", "LYR_CDK2i", "LYFR_CDK2i")
+)
+
+db_down_df$direction <- "down"
+
+db_df <- rbind(db_up_df, db_down_df)
+```
+
+# Figures
+
+```{r fig.height = 6, fig.width=10}
+a1 <- db_df %>% ggplot(aes(x = group, y = frequency, fill = feature)) +
+  geom_bar(position = "stack", stat = "identity") +
+  scale_fill_manual(values = colors_peakanno_11[!is.na(names(colors_peakanno_11))]) +
+  facet_wrap(. ~ direction) +
+  theme_prism() +
+  # ylim_freq added to adjust the frequency limit
+  #  ylim(c(0, freq_limit)) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    strip.text = element_text(size = 15),
+    legend.position = "top",
+    legend.title = element_blank()
+  )
+
+a2 <- db_df %>% ggplot(aes(x = group, y = frequency, fill = feature)) +
+  geom_bar(position = "fill", stat = "identity") +
+  scale_fill_manual(values = colors_peakanno_11[!is.na(names(colors_peakanno_11))]) +
+  facet_wrap(. ~ direction) +
+  theme_prism() +
+  # ylim_freq added to adjust the frequency limit
+  #  ylim(c(0, freq_limit)) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    strip.text = element_text(size = 15),
+    legend.position = "top",
+    legend.title = element_blank()
+  )
+
+
+a1
+a2
+```
+
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/20230125_CP_ATAC_MCF7M_CDK2i/R_analysis/4.diffbind_overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("overcomeresist_ATAC_peakannotation_numbers.pdf",
+  width = 10, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+
+a1
+
+dev.off()
+
+pdf("overcomeresist_ATAC_peakannotation_proportion.pdf",
+  width = 10, # 5 x 300 pixels
+  height = 5
+) # 300 pixels per inch)        # smaller font size
+
+a2
+
+dev.off()
+```

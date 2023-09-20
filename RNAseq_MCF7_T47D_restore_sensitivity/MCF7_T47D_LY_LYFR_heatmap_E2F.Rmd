@@ -1,0 +1,256 @@
+---
+title: "MCF7 T47D E2F heatmap"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+# load library
+
+```{r echo=FALSE}
+.libPaths(c("/home/aahn/R/x86_64-pc-linux-gnu-library/4.2", "/config/binaries/R/4.2.0/R_libraries", "/config/binaries/R/4.2.0/lib64/R/library"))
+```
+
+```{r include = FALSE, message=FALSE}
+# load library
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(cowplot)
+library(DESeq2)
+library(DT)
+library(ggplot2)
+library(RColorBrewer)
+library(biomaRt)
+library(ggsci)
+library(pheatmap)
+library(gplots)
+library(ggdendro)
+library(edgeR)
+library(clusterProfiler)
+library(ComplexHeatmap)
+library(UpSetR)
+library(GSVA)
+library(ggprism)
+```
+
+
+```{r echo=FALSE}
+# from preparation file
+# load(file = "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M/antonioahn/preparation/data/preparation.RData")
+load(file = "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/preparation/data/preparation.RData")
+
+load("/researchers/antonio.ahn/general/R/Download_resources/RData/mart_apr2019.RData")
+load("/researchers/antonio.ahn/general/R/Download_resources/RData/mart_aug2020.RData")
+```
+
+# heatmap function
+
+```{r}
+make_heatmap_overcome <- function(genes_input, cell, turnon_rownames = FALSE, rownames_size = 7, turnon_clusterrows = TRUE) {
+  sample_information_filt <- sample_information_list[[cell]] %>% filter(!resist_treat %in% c("PAR_ARC", "PAR_LY.ARC"))
+  samples_interest <- sample_information_filt$name
+  # only get the genes that interesct between genes_input and the genes in the normalised matrix
+  genes_input <- intersect(genes_input, rownames(norm_mat_list[[cell]]))
+  # select out the matrix with only the genes of interest
+  heatmap_mat <- norm_mat_list[[cell]][genes_input, samples_interest]
+  # take out any rows with all zero's in the rows. This sometimes happens because when i only select out the PAR group, all zeros but its in the matrix because in the LYFR it is expressed. These are quite interesting... SASP genes that are not expressed at PAR but only expressed in LYFR. I wonder if these are expressed at PAR treated with LY + Fulv. shouldn't be? cuz Fulv brings most things down ...
+  index <- apply(heatmap_mat, 1, function(row) all(row == 0))
+  heatmap_mat <- heatmap_mat[!index, ]
+  # generate z-score
+  scaled.mat <- t(scale(t(heatmap_mat)))
+  ##### ----------------------------------------------------------------------------------------------------
+  # annotate column
+  # annotate column
+  column_annotate_treatment <- sample_information_filt$treatment
+  column_annotate_resistance <- sample_information_filt$resistance
+  annotation_column <- data.frame(row.names = colnames(scaled.mat), treatment = column_annotate_treatment, resistance = column_annotate_resistance)
+  ##### ----------------------------------------------------------------------------------------------------
+  # colors
+  # cell colors
+  # col.pan <- colorRampPalette(c("purple","black", "yellow"))(100)
+  col.pan <- colorRampPalette(c("black", "dodgerblue3", "white", "orange", "red"))(100)
+  # column colors
+  # column_color_treatment <- ggsci::pal_npg()(8)[c(2,4,3,1)]
+  column_color_treatment <- ggsci::pal_npg()(8)[c(2, 4, 3)]
+  # neeed to make if statements so the colors are selected according to which resistance group i want to plot
+  column_color_resistance <- ggsci::pal_simpsons()(6)[1:3]
+
+  names(column_color_treatment) <- unique(annotation_column$treatment)
+  names(column_color_resistance) <- unique(annotation_column$resistance)
+
+  anno_colors <- list(
+    treatment = column_color_treatment,
+    resistance = column_color_resistance
+  )
+  ##### ----------------------------------------------------------------------------------------------------
+  # color bar range
+  # get the maximum + minimum value, make it absolute numbers and get the highest number. Set this as the range
+  color_bar_range <- max(abs(min(scaled.mat)), abs(max(scaled.mat)))
+  # ceiling rounds up (to integer)
+  color_bar_range <- ceiling(color_bar_range)
+  ##### ---------------------------------------------------------------------------------------------------
+  # because MCF7M and T47D have different sample numbers (MCF7M 1 sample was taken out due to poor quality), need to make a if statement to take that into account
+  if (cell == "MCF7M") {
+    gaps_col <- c(6, 11)
+  } else if (cell == "T47D") {
+    gaps_col <- c(6, 12)
+  } else {
+    gaps_col <- 0
+  }
+
+
+  pheatmap::pheatmap(scaled.mat, col = col.pan, cluster_rows = turnon_clusterrows, cluster_cols = F, show_rownames = turnon_rownames, show_colnames = T, annotation_col = annotation_column, border_color = FALSE, legend = T, fontsize_row = rownames_size, annotation_colors = anno_colors, treeheight_col = 20, breaks = seq(-color_bar_range, color_bar_range, length.out = 100), clustering_distance_rows = "euclidean", clustering_method = "complete", gaps_col = gaps_col)
+}
+```
+
+```{r}
+genes_input <- filter(h_gene_sets, gs_name == "HALLMARK_E2F_TARGETS")$gene_symbol
+make_heatmap_overcome(genes_input, cell = "MCF7M")
+
+
+make_heatmap_overcome(genes_input, cell = "T47D")
+```
+
+```{r}
+incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+# show_col(incyclix_col)
+boxplot_col <- c(
+  "PAR_DMSO" = "#0070B9",
+  "PAR_LY" = "#872464",
+  "LYR_DMSO" = "#FFC541",
+  "LYFR_DMSO" = "#00A8E3"
+)
+
+make_heatmap_symbol_CHM <- function(genes_input, cellline,
+                                    turnon_rownames = FALSE, rownames_size = 7,
+                                    turnon_clusterrows = TRUE, show_barplot = FALSE,
+                                    kmeansrows_number = 1) {
+  # only get the genes that interesct between genes_input and the genes in the normalised matrix
+  genes_input <- intersect(genes_input, rownames(norm_mat_list[[cellline]]))
+
+  sample_information_filt <- sample_information_list[[cellline]] %>% filter(!resist_treat %in% c("PAR_ARC", "PAR_LY.ARC"))
+  samples_interest <- sample_information_filt$name
+  heatmap_mat <- norm_mat_list[[cellline]][genes_input, samples_interest]
+  # take out any rows with all zero's in the rows. This sometimes happens because when i only select out the PAR group, all zeros but its in the matrix because in the LYFR it is expressed. These are quite interesting... SASP genes that are not expressed at PAR but only expressed in LYFR. I wonder if these are expressed at PAR treated with LY + Fulv. shouldn't be? cuz Fulv brings most things down ...
+  index <- apply(heatmap_mat, 1, function(row) all(row == 0))
+  heatmap_mat <- heatmap_mat[!index, ]
+  # generate z-score
+  scaled.mat <- t(scale(t(heatmap_mat)))
+  ##### ----------------------------------------------------------------------------------------------------
+  # column colors
+  # incyclix_col <- c("#872464", "#0070B9", "#FFC541", "#00A8E3")
+
+  # column_color_treatment <- col_npg5[1:3]
+  column_color_treatment <- c("#00A8E3", "#872464", "#FFC541")
+  # column_color_resistance <- ggsci::pal_simpsons()(8)[1:3]
+  column_color_resistance <- col_npg5[1:3]
+
+  names(column_color_treatment) <- unique(sample_information_filt$treatment)
+  names(column_color_resistance) <- unique(sample_information_filt$resistance)
+
+  anno_colors <- list(
+    treatment = column_color_treatment,
+    resistance = column_color_resistance
+  )
+  # column annotations
+  column_ha <- HeatmapAnnotation(
+    mean = anno_barplot(colMeans(scaled.mat), height = unit(2, "cm")),
+    treatment = sample_information_filt$treatment,
+    resistance = sample_information_filt$resistance,
+    col = anno_colors
+  )
+  # column split
+  column_split <- factor(sample_information_filt$resistance, levels = c("PAR", "LYR", "LYFR"))
+  ##### ----------------------------------------------------------------------------------------------------
+  # cell colors
+  col.pan <- colorRampPalette(c("black", "dodgerblue3", "white", "orange", "red"))(100)
+  ##### ----------------------------------------------------------------------------------------------------
+  # make heatmap
+  Heatmap(scaled.mat,
+    name = "z-score",
+    col = col.pan,
+    top_annotation = column_ha,
+    cluster_columns = FALSE,
+    row_km = kmeansrows_number, show_row_names = turnon_rownames, row_names_gp = gpar(fontsize = rownames_size),
+    column_split = column_split
+  )
+}
+```
+
+```{r}
+make_heatmap_symbol_CHM(filter(h_gene_sets, gs_name == "HALLMARK_E2F_TARGETS")$gene_symbol,
+  cellline = "MCF7M",
+  kmeansrows_number = 1
+)
+
+
+make_heatmap_symbol_CHM(filter(h_gene_sets, gs_name == "HALLMARK_E2F_TARGETS")$gene_symbol,
+  cellline = "T47D",
+  kmeansrows_number = 1
+)
+```
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+
+pdf("overcomeresist_MCF7M_E2Ftarget_heatmap.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+
+make_heatmap_symbol_CHM(filter(h_gene_sets, gs_name == "HALLMARK_E2F_TARGETS")$gene_symbol,
+  cellline = "MCF7M",
+  kmeansrows_number = 1
+)
+
+dev.off()
+
+
+pdf("overcomeresist_T47D_E2Ftarget_heatmap.pdf",
+  width = 8, # 5 x 300 pixels
+  height = 6
+) # 300 pixels per inch)        # smaller font size
+
+
+make_heatmap_symbol_CHM(filter(h_gene_sets, gs_name == "HALLMARK_E2F_TARGETS")$gene_symbol,
+  cellline = "T47D",
+  kmeansrows_number = 1
+)
+
+dev.off()
+```
+
+```{r eval=FALSE}
+save_pdf_dir <- "/researchers/krutika.ambani/Goel_lab_members/Cath_Dietrich/220801_MCF7M_T47D_LY_LYFR/R_analysis/MCF7M_T47D_combined_AA/1.overcome_resistance/paper_figures/figures_output"
+
+setwd(save_pdf_dir)
+# ggsave(file="OV5398PDX_E2Fbarcode_test.svg", plot=a1, width=10, height=8)
+
+
+genes_i <- c("CCNE1")
+celllines_i <- c("MCF7M", "T47D")
+
+for (i in genes_i) {
+  for (j in celllines_i) {
+    pdf(paste0("overcomeresistance_", j, "_", i, ".pdf"),
+      width = 8, # 5 x 300 pixels
+      height = 6
+    ) # 300 pixels per inch)        # smaller font size
+
+    ggplot_gene_relative(i, j)
+
+    dev.off()
+  }
+}
+```
+
+
